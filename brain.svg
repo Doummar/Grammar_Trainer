@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 2 36 40" width="48" height="48">
+  <!-- Left lobe -->
+  <path d="M24,4 C15.16,4 8,11.16 8,20 C8,22.5 8.5,24.8 9.5,27 C9.1,28 8,31 8,33 C8,36 10,38 13,38 C14,38 15,37.5 15.5,37 C17,39 19,40 21,40 C22.5,40 23.5,39.5 24,39" fill="#A7F3D0" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Right lobe -->
+  <path d="M24,4 C32.84,4 40,11.16 40,20 C40,22.5 39.5,24.8 38.5,27 C38.9,28 40,31 40,33 C40,36 38,38 35,38 C34,38 33,37.5 32.5,37 C31,39 29,40 27,40 C25.5,40 24.5,39.5 24,39" fill="#C7D2FE" stroke="#4F46E5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Middle line separation -->
+  <path d="M24,4 L24,39" stroke="#312E81" stroke-width="2" stroke-linecap="round"/>
+  <!-- Inner folds Left (emerald) -->
+  <path d="M14,15 C14,15 16,13 19,15 M11,20 C11,20 14,18 17,21 M12,26 C12,26 15,25 17,28 M17,33 C17,33 20,32 21,35" fill="none" stroke="#047857" stroke-width="2" stroke-linecap="round"/>
+  <!-- Inner folds Right (indigo) -->
+  <path d="M34,15 C34,15 32,13 29,15 M37,20 C37,20 34,18 31,21 M36,26 C36,26 33,25 31,28 M31,33 C31,33 28,32 27,35" fill="none" stroke="#3730A3" stroke-width="2" stroke-linecap="round"/>
+</svg>

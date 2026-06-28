@@ -1,0 +1,20 @@
+{
+  "api_provider": "gemini",
+  "api_key": "",
+  "mistral_api_key": "",
+  "default_language": "English",
+  "default_difficulty": "A1",
+  "default_distractors": 5,
+  "auto_flip": true,
+  "show_language": false,
+  "show_difficulty": false,
+  "show_grammar_type": false,
+  "show_hint": false,
+  "show_check_answer": false,
+  "show_white_background": false,
+  "center_horizontal": true,
+  "center_vertical": true,
+  "font_size": 20,
+  "card_max_width": 800,
+  "explanation_align": "left"
+}
