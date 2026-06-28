@@ -20,11 +20,16 @@ Originally built for my own Danish studies and later shared with the Anki commun
 
 ![Generator](https://i.postimg.cc/DmVYKmrM/1.png)
 
----
+---         
 
 ### Settings
 
 ![Settings](https://i.postimg.cc/fTmMS9rd/2.png)
+
+### Add Card
+
+![Add Card](https://i.postimg.cc/662hRrxn/4.png)
+
 
 ---
 
