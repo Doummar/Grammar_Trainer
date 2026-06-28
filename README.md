@@ -60,8 +60,6 @@ Originally built for my own Danish studies and later shared with the Anki commun
 - Spanish
 - French
 - Italian
-- Japanese
-- Korean
 - Language learners
 - Schools
 - Universities
