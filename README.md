@@ -126,7 +126,7 @@ Install from AnkiWeb or clone this repository and place the add-on inside your `
 
 Questions, bugs, or feature requests are always welcome.
 
-Open an issue on GitHub. 
+Open an issue on GitHub: https://github.com/Doummar/Grammar_Trainer/issues
 
 ---
 
