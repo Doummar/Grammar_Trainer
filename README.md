@@ -1,45 +1,128 @@
-# Grammar Trainer Add-on
+# Grammar Trainer
 
-A professional, Qt6-compatible Anki add-on to automatically generate grammar cloze-dropdown exercises directly inside your cards using Gemini AI.
+AI-powered grammar practice for Anki.
 
-## Installation Instructions
+Grammar Trainer combines interactive dropdown exercises with AI-generated example sentences, making grammar practice faster, smarter, and more engaging.
 
-### Method 1: Direct Folder Copy (Easiest & Fastest)
-1. Open **Anki**.
-2. Go to the top menu bar and select **Tools -> Add-ons**.
-3. In the Add-ons manager, click the **View Files** button. This opens Anki's local add-ons directory in your file manager.
-4. Create a new folder named `ai_grammar_dropdown` inside that directory.
-5. Unzip all the files in this downloadable pack directly inside that newly created `ai_grammar_dropdown` folder.
-6. **Restart Anki**.
-
-### Method 2: Package as .ankiaddon
-1. Select all files in this directory (`manifest.json`, `__init__.py`, `settings.py`, etc.) and add them to a standard **ZIP archive**.
-2. Rename the extension of the resulting zip file from `.zip` to `.ankiaddon` (e.g., `ai_grammar_dropdown.ankiaddon`).
-3. Inside Anki, select **Tools -> Add-ons**, then drag and drop the `.ankiaddon` file directly onto the add-ons list, or click **Install from file** and select the `.ankiaddon` file.
-4. **Restart Anki**.
+Originally built for my own Danish studies and later shared with the Anki community.
 
 ---
 
-## How to Use
+# Preview
 
-1. **Setup your API Key**:
-   - Inside Anki, go to **Tools -> Grammar Trainer Settings**.
-   - Paste your **Gemini API key** and select your preferred default language and difficulty tier. Click **Save**.
-   
-   > 💡 **How to Get a 100% Free API Key (For Students):**
-   > 1. Go to **Google AI Studio** (https://aistudio.google.com/) and sign in with any standard Google/Gmail account.
-   > 2. Click **Get API Key** and click **Create API Key**.
-   > 
-   > 🇪🇺 / 🇬🇧 **If you are in Europe/EEA/UK:** Google disables the completely free tier (Quota Limit: 0) in European regions due to local regulations. 
-   > To get it 100% free, simply connect a **VPN** to the **United States** (or another non-EU country) before creating your API key and while using the generator inside Anki. This bypasses the region restriction and grants you standard free access! Alternatively, adding a Pay-As-You-Go billing profile is extremely cheap (generating 100 exercises costs less than a single penny!).
+### AI Card Generation
 
-2. **Generate a Grammar Card**:
-   - Open the generator by clicking the brain icon (🧠) in Anki's editor toolbar or pressing **Ctrl+Shift+G**.
-   - Enter a target sentence you want to practice, or leave it blank to let the AI build one from scratch.
-   - Choose the target language, difficulty tier (A1-C2), and the grammar topic (Verb Forms, Nouns, Adjectives, Prepositions, etc.).
-   - Click **Generate and Create Card**.
-   - The card is parsed and saved instantly to your current active deck!
+![Demo](https://i.postimg.cc/QNStx5vH/2026-06-2815-25-21-ezgif-com-video-to-gif-converter.gif)
 
-3. **Practice**:
-   - Review your cards. The blank space is replaced by a dropdown menu populated with smart grammatical distractors.
-   - Choose your answer and click **Check Answer** to get instant feedback and a detailed grammatical breakdown explaining the syntax rules!
+---
+
+### AI Generator
+
+![Generator](https://i.postimg.cc/43xdQfKk/1.png)
+
+---
+
+### Settings
+
+![Settings](https://i.postimg.cc/fTmMS9rd/2.png)
+
+---
+
+### Interactive Grammar Cards
+
+![Cards](https://i.postimg.cc/y8zBB8n5/3.png)
+
+---
+
+# Features
+
+- AI-powered grammar card generation
+- Google Gemini support
+- Mistral AI support
+- Automatic cloze generation
+- Multi-cloze (double blank) cards
+- Interactive dropdown answers
+- AI-generated distractors
+- Native TTS support
+- Google Translate TTS
+- Keyboard shortcuts
+- Language & difficulty badges
+- Dark Mode support
+- Fully customizable appearance
+
+---
+
+# Perfect For
+
+- Danish
+- English
+- German
+- Spanish
+- French
+- Italian
+- Japanese
+- Korean
+- Language learners
+- Schools
+- Universities
+- Self-study
+- Grammar practice
+- Exam preparation
+
+---
+
+# How It Works
+
+Grammar Trainer automatically converts grammar exercises into interactive dropdown questions.
+
+Instead of simply reading grammar rules, learners actively choose the correct answer while reviewing, strengthening long-term memory through active recall.
+
+Cards can be created manually or generated with AI.
+
+---
+
+# AI Providers
+
+## Mistral AI
+
+Recommended for many European users.
+
+- Free API
+- No credit card required (subject to Mistral's current terms)
+- Fast generation
+
+## Google Gemini
+
+- Excellent grammar generation
+- Generous free tier
+- High-quality language models
+
+---
+
+# Why I Built It
+
+I originally created Grammar Trainer while studying Danish because creating high-quality grammar cards manually was time-consuming.
+
+Today it's one of the add-ons I use most during my own study sessions.
+
+Although it was developed around Danish grammar, the goal has always been to support many different languages.
+
+If you use another language and notice something that could work better, I'd genuinely love to hear from you. Feel free to open an issue, suggest improvements, or fork the project to adapt it to your own learning workflow.
+
+---
+
+# Installation
+
+Install from AnkiWeb or clone this repository and place the add-on inside your `addons21` folder.
+
+---
+
+# Support
+
+Questions, bugs, or feature requests are always welcome.
+
+Open an issue on GitHub.
+
+---
+
+**Practice grammar, build confidence, and keep learning! — Adel**
