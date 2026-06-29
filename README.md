@@ -55,13 +55,13 @@ Originally built for my own Danish studies and later shared with the Anki commun
 # Perfect For
 
 - Danish
+- Swedish
+- Norwegian
 - English
 - German
 - Spanish
 - French
 - Italian
-- Japanese
-- Korean
 - Language learners
 - Schools
 - Universities
