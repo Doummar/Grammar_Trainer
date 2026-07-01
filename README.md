@@ -125,4 +125,4 @@ Open an issue on GitHub: https://github.com/Doummar/Grammar_Trainer/issues
 
 ---
 
-**Practice grammar, build confidence, and keep learning! — Adel**
+**Practice grammar, build confidence, and keep learning!** — Adel
