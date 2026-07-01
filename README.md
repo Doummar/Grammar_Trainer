@@ -12,7 +12,7 @@ Originally built for my own Danish studies and later shared with the Anki commun
 
 ### AI Card Generation
 
-![Demo](https://i.postimg.cc/QNStx5vH/2026-06-2815-25-21-ezgif-com-video-to-gif-converter.gif)
+![Demo](https://i.postimg.cc/9Mdg05Lt/1.gif)
 
 ---
 
