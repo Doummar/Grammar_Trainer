@@ -303,6 +303,22 @@ class SettingsDialog(QDialog):
         self.explanation_align_combo.addItems(["left", "center"])
         self.explanation_align_combo.setCurrentText(self.config.get("explanation_align", "left"))
  
+        # 19. Blank Reveal Delay QSpinBox
+        self.blank_timer_spin = QSpinBox()
+        self.blank_timer_spin.setRange(0, 90)
+        self.blank_timer_spin.setSuffix("s")
+        self.blank_timer_spin.setValue(self.config.get("blank_timer", 0))
+
+        # 20. Hint Reveal Delay QSpinBox
+        self.hint_timer_spin = QSpinBox()
+        self.hint_timer_spin.setRange(0, 90)
+        self.hint_timer_spin.setSuffix("s")
+        self.hint_timer_spin.setValue(self.config.get("hint_timer", 0))
+
+        # 21. Auto-Open Dropdown QCheckBox
+        self.auto_open_dropdown_cb = QCheckBox("Automatically open dropdown menu when delay timer finishes")
+        self.auto_open_dropdown_cb.setChecked(self.config.get("auto_open_dropdown", False))
+ 
         # Help components
         self.help_guide_btn = QPushButton("Open Help Guide")
         self.help_guide_btn.setStyleSheet(btn_style)
@@ -338,6 +354,9 @@ class SettingsDialog(QDialog):
         general_form.addRow(QLabel("Number of Distractors:"), self.dist_spin)
         general_form.addRow(QLabel("Auto-Flip Card:"), self.auto_flip_cb)
         general_form.addRow(QLabel("Card White BG:"), self.show_bg_cb)
+        general_form.addRow(QLabel("Blank Reveal Delay:"), self.blank_timer_spin)
+        general_form.addRow(QLabel("Hint Reveal Delay:"), self.hint_timer_spin)
+        general_form.addRow(QLabel("Auto-Open Dropdown:"), self.auto_open_dropdown_cb)
         general_layout.addLayout(general_form)
         general_layout.addWidget(self.info_note)
         general_layout.addStretch()
@@ -521,6 +540,9 @@ class SettingsDialog(QDialog):
         self.config["font_size"] = self.font_size_spin.value()
         self.config["card_max_width"] = self.card_max_width_spin.value()
         self.config["explanation_align"] = self.explanation_align_combo.currentText()
+        self.config["blank_timer"] = self.blank_timer_spin.value()
+        self.config["hint_timer"] = self.hint_timer_spin.value()
+        self.config["auto_open_dropdown"] = self.auto_open_dropdown_cb.isChecked()
         
         # Write config persistently
         addon_name = __package__ or __name__.split('.')[0]
@@ -570,6 +592,9 @@ class SettingsDialog(QDialog):
             self.font_size_spin.setValue(20)
             self.card_max_width_spin.setValue(800)
             self.explanation_align_combo.setCurrentText("left")
+            self.blank_timer_spin.setValue(0)
+            self.hint_timer_spin.setValue(0)
+            self.auto_open_dropdown_cb.setChecked(False)
 
 class CollapsibleSection(QWidget):
     def __init__(self, title, content_widget, parent=None):
