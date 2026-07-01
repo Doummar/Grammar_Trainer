@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import urllib.request
 import json
-import base64
+from html import escape
 from aqt import mw
 from aqt.qt import *
 from aqt.utils import showInfo, showWarning
@@ -758,7 +758,7 @@ class GeneratorDialog(QDialog):
         prompt += '      "targetWord": "the correct answer for this blank",\n'
         prompt += '      "options": ["the targetWord", "distractor1", "distractor2", ...],\n'
         prompt += '      "hint": "a short hint for this blank",\n'
-        prompt += '      "explanation": "why targetWord is correct and distractors are wrong"\n'
+        prompt += '      "explanation": "A serialized JSON string mapping each option in options to its specific explanation in the target language being studied (" + language + "). Example: \\"{\\"option1\\": \\"explanation1\\", \\"option2\\": \\"explanation2\\"}\\""\n'
         prompt += '    }\n'
         prompt += '  ]\n'
         prompt += '}'
@@ -782,13 +782,17 @@ class GeneratorDialog(QDialog):
         try:
             import re
             sentence = data.get("sentence", "")
-            sentence = re.sub(r'[{]+blank(d*)[}]+', lambda m: '{{blank' + m.group(1) + '}}', sentence)
+            # FIX #4: Changed regex pattern from (d*) to (\d*)
+            sentence = re.sub(r'[{]+blank(\d*)[}]+', lambda m: '{{blank' + m.group(1) + '}}', sentence)
             
             blanks = data.get("blanks", [])
             if len(blanks) == 1:
                 b = blanks[0]
                 target_word = b.get("targetWord", "")
-                options_str = "|".join(b.get("options", []))
+                options_list = b.get("options", [])
+                if not options_list:
+                    options_list = []
+                options_str = "|".join(options_list)
                 explanation = b.get("explanation", "")
             else:
                 targets = []
@@ -796,8 +800,12 @@ class GeneratorDialog(QDialog):
                 explanations = []
                 for b in blanks:
                     targets.append(b.get("targetWord", ""))
-                    options_group.append("|".join(b.get("options", [])))
-                    explanations.append(f"<strong>Blank '{b.get('blankId')}':</strong> {b.get('explanation')}")
+                    opts = b.get("options", [])
+                    if not opts:
+                        opts = []
+                    options_group.append("|".join(opts))
+                    # FIX #7: Added HTML escaping for blankId
+                    explanations.append(f"<strong>Blank '{escape(b.get('blankId', ''))}':</strong> {escape(b.get('explanation', ''))}")
                     
                 target_word = " || ".join(targets)
                 options_str = " || ".join(options_group)
@@ -806,6 +814,8 @@ class GeneratorDialog(QDialog):
             grammar_type = data.get("grammarType", self.type_combo.currentText())
             difficulty = data.get("difficulty", self.diff_combo.currentText())
             language = data.get("language", self.lang_combo.currentText())
+            image_url = data.get("image", "")
+            image_html = f'<img src="{escape(image_url)}">' if image_url else ""
             
             if self.editor:
                 # Update current note fields directly in the active editor
@@ -820,11 +830,16 @@ class GeneratorDialog(QDialog):
                     ("Difficulty", difficulty),
                     ("Language", language),
                     ("FrontAudio", ""),
-                    ("BackAudio", "")
+                    ("BackAudio", ""),
                 ]:
                     if field in note:
                         note[field] = val
                         fields_set.append(field)
+                
+                # FIX #9: Only set Image field if it exists in the note type
+                if "Image" in note:
+                    note["Image"] = image_html
+                    fields_set.append("Image")
                 
                 # Reload active editor representation to update GUI fields
                 self.editor.loadNote()
@@ -853,6 +868,9 @@ class GeneratorDialog(QDialog):
                 note["Language"] = language
                 note["FrontAudio"] = ""
                 note["BackAudio"] = ""
+                # FIX #9: Only set Image field if it exists
+                if "Image" in note:
+                    note["Image"] = image_html
                 
                 # Add to active deck
                 deck_id = mw.col.decks.active()
