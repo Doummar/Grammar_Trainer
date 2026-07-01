@@ -18,7 +18,7 @@ Originally built for my own Danish studies and later shared with the Anki commun
 
 ### AI Generator
 
-![Generator](https://i.postimg.cc/43xdQfKk/1.png)
+![Generator](https://i.postimg.cc/Hxk8cb2y/2.png)
 
 ---
 
