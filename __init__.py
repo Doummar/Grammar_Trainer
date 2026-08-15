@@ -63,7 +63,7 @@ def init_addon():
     menu = mw.form.menuTools
     
     # Settings Item
-    action_settings = QAction("Grammar Trainer Settings", mw)
+    action_settings = QAction("Grammar Trainer", mw)
     action_settings.triggered.connect(show_settings_dialog)
     menu.addAction(action_settings)
 

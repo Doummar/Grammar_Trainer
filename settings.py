@@ -16,6 +16,12 @@ class ConnectionTester(QThread):
         import urllib.error
         import json
         import time
+        import ssl
+        
+        try:
+            ssl_context = ssl._create_unverified_context()
+        except Exception:
+            ssl_context = None
         
         if not self.api_key:
             self.finished.emit(False, "API Key is empty. Please enter an API key.")
@@ -47,7 +53,7 @@ class ConnectionTester(QThread):
                         headers={"Content-Type": "application/json"},
                         method="POST"
                     )
-                    with urllib.request.urlopen(req, timeout=8) as response:
+                    with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
                         res_data = json.loads(response.read().decode("utf-8"))
                         if "candidates" in res_data and len(res_data["candidates"]) > 0:
                             self.finished.emit(True, f"Successfully connected using model: {model} ({version})!")
@@ -82,7 +88,7 @@ class ConnectionTester(QThread):
                     },
                     method="POST"
                 )
-                with urllib.request.urlopen(req, timeout=8) as response:
+                with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
                     res_data = json.loads(response.read().decode("utf-8"))
                     if "choices" in res_data and len(res_data["choices"]) > 0:
                         self.finished.emit(True, "Successfully connected to Mistral AI!")
@@ -318,6 +324,10 @@ class SettingsDialog(QDialog):
         # 21. Auto-Open Dropdown QCheckBox
         self.auto_open_dropdown_cb = QCheckBox("Automatically open dropdown menu when delay timer finishes")
         self.auto_open_dropdown_cb.setChecked(self.config.get("auto_open_dropdown", False))
+
+        # 22. Keyboard Shortcuts QCheckBox
+        self.keyboard_shortcuts_cb = QCheckBox("Enable keyboard shortcuts (number keys 1-9 to open/pick an answer, Enter to check)")
+        self.keyboard_shortcuts_cb.setChecked(self.config.get("keyboard_shortcuts", False))
  
         # Help components
         self.help_guide_btn = QPushButton("Open Help Guide")
@@ -357,6 +367,7 @@ class SettingsDialog(QDialog):
         general_form.addRow(QLabel("Blank Reveal Delay:"), self.blank_timer_spin)
         general_form.addRow(QLabel("Hint Reveal Delay:"), self.hint_timer_spin)
         general_form.addRow(QLabel("Auto-Open Dropdown:"), self.auto_open_dropdown_cb)
+        general_form.addRow(QLabel("Keyboard Shortcuts:"), self.keyboard_shortcuts_cb)
         general_layout.addLayout(general_form)
         general_layout.addWidget(self.info_note)
         general_layout.addStretch()
@@ -543,6 +554,7 @@ class SettingsDialog(QDialog):
         self.config["blank_timer"] = self.blank_timer_spin.value()
         self.config["hint_timer"] = self.hint_timer_spin.value()
         self.config["auto_open_dropdown"] = self.auto_open_dropdown_cb.isChecked()
+        self.config["keyboard_shortcuts"] = self.keyboard_shortcuts_cb.isChecked()
         
         # Write config persistently
         addon_name = __package__ or __name__.split('.')[0]
@@ -595,6 +607,7 @@ class SettingsDialog(QDialog):
             self.blank_timer_spin.setValue(0)
             self.hint_timer_spin.setValue(0)
             self.auto_open_dropdown_cb.setChecked(False)
+            self.keyboard_shortcuts_cb.setChecked(False)
 
 class CollapsibleSection(QWidget):
     def __init__(self, title, content_widget, parent=None):
@@ -745,13 +758,17 @@ class GuideDialog(QDialog):
             "• <b>Option 1: Using the AI Cloze Generator (Recommended)</b><br/>"
             "1. Click the brain icon (🧠) in Anki's editor toolbar or press <b>Ctrl+Shift+G</b> to open the generator.<br/>"
             "2. Fill in the Language, Difficulty, and specify your grammar topic (e.g. 'Spanish Subjunctive').<br/>"
-            "3. Click <b>Generate Card & Open Fields</b>. Review or edit any fields, then click <b>Add</b> to save.<br/><br/>"
-            "• <b>Option 2: Creating Cards Manually</b><br/>"
-            "1. In Anki, click <b>Add</b> in the main window toolbar.<br/>"
-            "2. Set the Note Type to <b>Grammar Trainer</b>.<br/>"
-            "3. In the <b>Sentence</b> field, write your sentence and use <b>{blank}</b> where the dropdown cloze should appear. For a double-cloze card, use <b>{blank1}</b> and <b>{blank2}</b>.<br/>"
-            "4. In the <b>TargetWord</b> field, enter the correct answers (separated by <b>||</b> for double-cloze).<br/>"
-            "5. In the <b>Options</b> field, write incorrect choices separated by <b>|</b> (and use <b>||</b> to separate distractor lists for double-cloze)."
+            "3. Click <b>Generate and Create Card</b>. The card is parsed and saved automatically.<br/><br/>"
+            "• <b>Option 2: Manual Entry tab (No AI / No API Key Needed)</b><br/>"
+            "1. Open the generator and switch to the <b>Manual Entry</b> tab.<br/>"
+            "2. Type your sentence, marking each blank with <b>___</b> (three or more underscores) — use it twice for a double-blank card.<br/>"
+            "3. Enter the correct answer and a comma-separated list of wrong options for each blank. A short note on why each is right/wrong is optional.<br/>"
+            "4. Click <b>Create Card</b>. This works entirely offline, no API key required.<br/><br/>"
+            "• <b>Option 3: Editing Note Fields Directly (Advanced)</b><br/>"
+            "1. In Anki, click <b>Add</b> in the main window toolbar and set the Note Type to <b>Grammar Trainer</b>.<br/>"
+            "2. In the <b>Sentence</b> field, write your sentence and use <b>{{blank}}</b> where the dropdown cloze should appear. For a double-cloze card, use <b>{{blank1}}</b> and <b>{{blank2}}</b>.<br/>"
+            "3. In the <b>TargetWord</b> field, enter the correct answers (separated by <b>||</b> for double-cloze).<br/>"
+            "4. In the <b>Options</b> field, write incorrect choices separated by <b>|</b> (and use <b>||</b> to separate distractor lists for double-cloze)."
         )
         add_cards_content.setWordWrap(True)
         add_cards_content.setStyleSheet(section_style)
@@ -761,9 +778,11 @@ class GuideDialog(QDialog):
         
         # Section 2: CLOZE KEYBOARD SHORTCUTS
         shortcuts_content = QLabel(
-            "• <b>Select Options:</b> Use your keyboard number keys <b>1</b>, <b>2</b>, <b>3</b>... to quickly choose dropdown items without using a mouse.<br/><br/>"
-            "• <b>Check Answers:</b> Press the <b>Enter</b> key to instantly validate your selections and see visual correct/incorrect boundaries.<br/><br/>"
-            "• <b>Flip Card:</b> Press <b>Spacebar</b> to flip the card to the back and reveal the full explanation/translation."
+            "• <b>Optional — enable in Settings:</b> turn on \"Keyboard Shortcuts\" in the General tab to use these (off by default).<br/><br/>"
+            "• <b>Open a Blank:</b> Press <b>Tab</b> to focus a dropdown, or press any number key <b>1-9</b> to jump straight to the next unanswered blank and open it.<br/><br/>"
+            "• <b>Select an Option:</b> Once a dropdown is open, press a number key <b>1</b>, <b>2</b>, <b>3</b>... to pick that option instantly, no mouse needed.<br/><br/>"
+            "• <b>Check Answers:</b> With no dropdown open, press <b>Enter</b> to instantly validate your selections and see visual correct/incorrect boundaries.<br/><br/>"
+            "• <b>Flip Card:</b> Press <b>Spacebar</b> (Anki's native shortcut) to flip the card to the back and reveal the full explanation/translation."
         )
         shortcuts_content.setWordWrap(True)
         shortcuts_content.setStyleSheet(section_style)

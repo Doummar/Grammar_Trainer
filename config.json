@@ -16,5 +16,9 @@
   "center_vertical": true,
   "font_size": 20,
   "card_max_width": 800,
-  "explanation_align": "left"
-}
+  "explanation_align": "left",
+  "blank_timer": 0,
+  "hint_timer": 0,
+  "auto_open_dropdown": false,
+  "keyboard_shortcuts": false
+} 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import urllib.request
 import json
-from html import escape
+import base64
 from aqt import mw
 from aqt.qt import *
 from aqt.utils import showInfo, showWarning
@@ -19,15 +19,23 @@ class GeminiWorker(QThread):
     def run(self):
         import urllib.error
         import time
+        import ssl
+        
+        try:
+            ssl_context = ssl._create_unverified_context()
+        except Exception:
+            ssl_context = None
         
         # Response validation schema
         schema = {
             "type": "object",
             "properties": {
+                "status": {"type": "string"},
                 "sentence": {"type": "string"},
                 "language": {"type": "string"},
                 "difficulty": {"type": "string"},
                 "grammarType": {"type": "string"},
+                "cefrReason": {"type": "string"},
                 "blanks": {
                     "type": "array",
                     "items": {
@@ -40,13 +48,24 @@ class GeminiWorker(QThread):
                                 "items": {"type": "string"}
                             },
                             "hint": {"type": "string"},
-                            "explanation": {"type": "string"}
+                            "explanation": {"type": "string"},
+                            "lemma": {"type": "string"},
+                            "partOfSpeech": {"type": "string"},
+                            "grammarPoint": {"type": "string"},
+                            "commonMistake": {"type": "string"},
+                            "memoryTip": {"type": "string"},
+                            "frequency": {"type": "string"},
+                            "register": {"type": "string"},
+                            "collocations": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            }
                         },
-                        "required": ["blankId", "targetWord", "options", "hint", "explanation"]
+                        "required": ["blankId", "targetWord", "options", "hint", "explanation", "lemma", "partOfSpeech", "grammarPoint", "commonMistake", "memoryTip", "frequency", "register", "collocations"]
                     }
                 }
             },
-            "required": ["sentence", "language", "difficulty", "grammarType", "blanks"]
+            "required": ["status", "sentence", "language", "difficulty", "grammarType", "cefrReason", "blanks"]
         }
         
         if self.api_provider == "gemini":
@@ -87,7 +106,7 @@ class GeminiWorker(QThread):
                             method="POST"
                         )
                         
-                        with urllib.request.urlopen(req) as response:
+                        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
                             res_data = json.loads(response.read().decode("utf-8"))
                             text_content = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
                             
@@ -179,7 +198,7 @@ class GeminiWorker(QThread):
                             method="POST"
                         )
                         
-                        with urllib.request.urlopen(req) as response:
+                        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
                             res_data = json.loads(response.read().decode("utf-8"))
                             text_content = res_data["choices"][0]["message"]["content"].strip()
                             
@@ -241,7 +260,13 @@ class OptionsWorker(QThread):
     def run(self):
         import urllib.error
         import time
+        import ssl
         
+        try:
+            ssl_context = ssl._create_unverified_context()
+        except Exception:
+            ssl_context = None
+            
         schema = {
             "type": "object",
             "properties": {
@@ -287,7 +312,7 @@ class OptionsWorker(QThread):
                             method="POST"
                         )
                         
-                        with urllib.request.urlopen(req) as response:
+                        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
                             res_data = json.loads(response.read().decode("utf-8"))
                             text_content = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
                             
@@ -381,7 +406,7 @@ class OptionsWorker(QThread):
                             method="POST"
                         )
                         
-                        with urllib.request.urlopen(req) as response:
+                        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
                             res_data = json.loads(response.read().decode("utf-8"))
                             text_content = res_data["choices"][0]["message"]["content"].strip()
                             
@@ -443,7 +468,7 @@ class GeneratorDialog(QDialog):
         super().__init__(parent)
         self.editor = editor
         self.setWindowTitle("Grammar Trainer")
-        self.resize(550, 540)
+        self.resize(550, 600)
         self.checkboxes = []
         
         # Detect Anki theme (dark/night mode vs light mode)
@@ -481,7 +506,7 @@ class GeneratorDialog(QDialog):
         # Check API Key status
         if not self.api_key:
             provider_name = "Gemini" if self.api_provider == "gemini" else "Mistral"
-            warning_lbl = QLabel(f"⚠️ {provider_name} API Key not found! Configure it in Tools -> Grammar Trainer Settings first.")
+            warning_lbl = QLabel(f"Warning: {provider_name} API Key not found! Configure it in Tools -> Grammar Trainer, or use the Manual Entry tab, which doesn't need one.")
             if self.is_dark:
                 warning_lbl.setStyleSheet("color: #fca5a5; font-weight: bold; padding: 4px; border: 1px solid #7f1d1d; border-radius: 4px; background-color: #310d0d;")
             else:
@@ -538,7 +563,7 @@ class GeneratorDialog(QDialog):
         tab_instant_layout.addWidget(self.multi_blank_chk)
         
         self.tab_instant.setLayout(tab_instant_layout)
-        self.tabs.addTab(self.tab_instant, "✨ Instant Generator")
+        self.tabs.addTab(self.tab_instant, "Instant Generator")
         
         # TAB 2: SUGGEST & REFINE (TWO-STEP)
         self.tab_twostep = QWidget()
@@ -549,7 +574,7 @@ class GeneratorDialog(QDialog):
         step1_lbl_layout = QHBoxLayout()
         self.word_input = QLineEdit()
         self.word_input.setPlaceholderText("e.g. at fyge")
-        self.suggest_btn = QPushButton("🔍 Suggest Options")
+        self.suggest_btn = QPushButton("Suggest Options")
         self.suggest_btn.clicked.connect(self.start_suggest_options)
         self.suggest_btn.setStyleSheet("font-weight: bold; padding: 4px 10px;")
         if not self.api_key:
@@ -592,7 +617,72 @@ class GeneratorDialog(QDialog):
         tab_twostep_layout.addWidget(self.step3_sentence_input)
         
         self.tab_twostep.setLayout(tab_twostep_layout)
-        self.tabs.addTab(self.tab_twostep, "🔄 Suggest & Refine Options")
+        self.tabs.addTab(self.tab_twostep, "Suggest & Refine Options")
+        
+        # TAB 3: MANUAL ENTRY (no AI / no API key needed)
+        self.tab_manual = QWidget()
+        tab_manual_outer_layout = QVBoxLayout()
+        tab_manual_outer_layout.setContentsMargins(0, 0, 0, 0)
+        
+        manual_scroll = QScrollArea()
+        manual_scroll.setWidgetResizable(True)
+        manual_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        manual_scroll_content = QWidget()
+        tab_manual_layout = QVBoxLayout()
+        
+        tab_manual_layout.addWidget(QLabel("Sentence — type ___ (three or more underscores) where each blank goes:"))
+        self.manual_sentence_input = QTextEdit()
+        self.manual_sentence_input.setPlaceholderText("e.g. Hun blev meget ___ over den uretfærdige behandling.")
+        self.manual_sentence_input.setFixedHeight(60)
+        tab_manual_layout.addWidget(self.manual_sentence_input)
+        
+        self.manual_multi_blank_chk = QCheckBox("This sentence has two blanks (use ___ twice)")
+        self.manual_multi_blank_chk.stateChanged.connect(self.on_manual_multi_blank_toggled)
+        tab_manual_layout.addWidget(self.manual_multi_blank_chk)
+        
+        self.manual_blank1_group = QGroupBox("Blank 1")
+        blank1_form = QFormLayout()
+        self.manual_answer1_input = QLineEdit()
+        self.manual_answer1_input.setPlaceholderText("e.g. forarget")
+        blank1_form.addRow("Correct answer:", self.manual_answer1_input)
+        self.manual_distractors1_input = QLineEdit()
+        self.manual_distractors1_input.setPlaceholderText("e.g. forarg, forarger, forargede")
+        blank1_form.addRow("Wrong options (comma separated):", self.manual_distractors1_input)
+        self.manual_correct_expl1_input = QLineEdit()
+        self.manual_correct_expl1_input.setPlaceholderText("Optional — shown when the correct answer is picked")
+        blank1_form.addRow("Why it's correct (optional):", self.manual_correct_expl1_input)
+        self.manual_incorrect_expl1_input = QLineEdit()
+        self.manual_incorrect_expl1_input.setPlaceholderText("Optional — shown when any wrong option is picked")
+        blank1_form.addRow("Why others are wrong (optional):", self.manual_incorrect_expl1_input)
+        self.manual_blank1_group.setLayout(blank1_form)
+        tab_manual_layout.addWidget(self.manual_blank1_group)
+        
+        self.manual_blank2_group = QGroupBox("Blank 2")
+        blank2_form = QFormLayout()
+        self.manual_answer2_input = QLineEdit()
+        self.manual_answer2_input.setPlaceholderText("e.g. lærte")
+        blank2_form.addRow("Correct answer:", self.manual_answer2_input)
+        self.manual_distractors2_input = QLineEdit()
+        self.manual_distractors2_input.setPlaceholderText("e.g. lærer, lære, lærende")
+        blank2_form.addRow("Wrong options (comma separated):", self.manual_distractors2_input)
+        self.manual_correct_expl2_input = QLineEdit()
+        self.manual_correct_expl2_input.setPlaceholderText("Optional — shown when the correct answer is picked")
+        blank2_form.addRow("Why it's correct (optional):", self.manual_correct_expl2_input)
+        self.manual_incorrect_expl2_input = QLineEdit()
+        self.manual_incorrect_expl2_input.setPlaceholderText("Optional — shown when any wrong option is picked")
+        blank2_form.addRow("Why others are wrong (optional):", self.manual_incorrect_expl2_input)
+        self.manual_blank2_group.setLayout(blank2_form)
+        self.manual_blank2_group.setVisible(False)
+        tab_manual_layout.addWidget(self.manual_blank2_group)
+        
+        tab_manual_layout.addStretch()
+        manual_scroll_content.setLayout(tab_manual_layout)
+        manual_scroll.setWidget(manual_scroll_content)
+        tab_manual_outer_layout.addWidget(manual_scroll)
+        self.tab_manual.setLayout(tab_manual_outer_layout)
+        self.tabs.addTab(self.tab_manual, "Manual Entry")
+        
+        self.tabs.currentChanged.connect(self.on_tab_changed)
         
         layout.addWidget(self.tabs)
         
@@ -611,12 +701,18 @@ class GeneratorDialog(QDialog):
         
         # Interaction buttons
         btn_layout = QHBoxLayout()
-        button_text = "✨ Generate and Insert into Card" if self.editor else "✨ Generate and Create Card"
-        self.gen_btn = QPushButton(button_text)
+        self._ai_btn_text = "Generate and Insert into Card" if self.editor else "Generate and Create Card"
+        self._manual_btn_text = "Insert into Card" if self.editor else "Create Card"
+        self.gen_btn = QPushButton(self._ai_btn_text)
         self.gen_btn.clicked.connect(self.start_generation)
         self.gen_btn.setStyleSheet("font-weight: bold; padding: 6px 14px;")
         if not self.api_key:
             self.gen_btn.setEnabled(False)
+            
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop_active_workers)
+        self.stop_btn.setStyleSheet("padding: 6px 14px;")
             
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
@@ -624,10 +720,41 @@ class GeneratorDialog(QDialog):
         
         btn_layout.addStretch()
         btn_layout.addWidget(self.gen_btn)
+        btn_layout.addWidget(self.stop_btn)
         btn_layout.addWidget(self.cancel_btn)
         layout.addLayout(btn_layout)
         
         self.setLayout(layout)
+        
+    def stop_active_workers(self):
+        # Stop worker if running
+        if hasattr(self, "worker") and self.worker and self.worker.isRunning():
+            self.worker.terminate()
+            self.worker.wait()
+            self.worker = None
+        # Stop options worker if running
+        if hasattr(self, "options_worker") and self.options_worker and self.options_worker.isRunning():
+            self.options_worker.terminate()
+            self.options_worker.wait()
+            self.options_worker = None
+            
+        self.progress_bar.setVisible(False)
+        self.gen_btn.setEnabled(True if self.api_key else False)
+        self.suggest_btn.setEnabled(True if self.api_key else False)
+        self.stop_btn.setEnabled(False)
+        self.loading_lbl.setText("Generation stopped by user.")
+        
+    def on_tab_changed(self, index):
+        if index == 2:
+            # Manual Entry tab: no AI call involved, so no API key is needed
+            self.gen_btn.setText(self._manual_btn_text)
+            self.gen_btn.setEnabled(True)
+        else:
+            self.gen_btn.setText(self._ai_btn_text)
+            self.gen_btn.setEnabled(True if self.api_key else False)
+            
+    def on_manual_multi_blank_toggled(self, state):
+        self.manual_blank2_group.setVisible(self.manual_multi_blank_chk.isChecked())
         
     def start_suggest_options(self):
         source_text = self.word_input.text().strip()
@@ -639,10 +766,11 @@ class GeneratorDialog(QDialog):
         difficulty = self.diff_combo.currentText()
         grammar_type = self.type_combo.currentText()
         
-        user_prompt = f'Given the source word or sentence: "{source_text}"\nLanguage: {language}\nGrammar Focus: {grammar_type}\nTarget Difficulty: {difficulty}\n\nGenerate a list of 4 to 6 grammatically related options/words/inflections that are highly relevant to this source text, representing different grammatical forms (such as different noun cases, verb tenses, adjective inflections, or plurals) of the word, or related words that would fit in a typical drop-down cloze exercise.\n\nEnsure the output is a clean JSON array of strings containing the options. Include the base word itself as one of the options.'
+        user_prompt = f'Given the source word or sentence: "{source_text}"\nLanguage: {language}\nGrammar Focus: {grammar_type}\nTarget Difficulty: {difficulty}\n\nFollow these strict steps before suggesting options:\nSTEP 1: Determine the exact lemma of the target word in the context of the sentence (if a sentence is provided). Use context to eliminate alternative lemmas.\nSTEP 2: Validate that the meaning of the lemma fits perfectly. Reject any lemma whose meaning does not match.\nSTEP 3: Generate a list of 4 to 6 grammatically related inflections/forms. All suggested options MUST belong to the EXACT SAME dictionary lemma as the target word. Do not include options with a different dictionary lemma even if they share a spelling or root. No derivationally, phonetically, or semantically related words of a different lemma.\nDanish example: "tage", "tog", "taget", "tager" are ALLOWED (same lemma "tage"). "tiltage", "modtage", "foretage" are FORBIDDEN (different lemmas).\nEnglish example: "take", "takes", "taking", "took", "taken" are ALLOWED (same lemma "take"). "take", "undertake", "mistake" are FORBIDDEN (different lemmas).\n\nEnsure the output is a clean JSON array of strings containing the options. Include the base word itself as one of the options.'
         
         self.suggest_btn.setEnabled(False)
         self.gen_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         self.loading_lbl.setText("Asking AI for option suggestions...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
@@ -656,6 +784,7 @@ class GeneratorDialog(QDialog):
         self.progress_bar.setVisible(False)
         self.suggest_btn.setEnabled(True)
         self.gen_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.loading_lbl.setText("Suggestions loaded!")
         
         while self.options_scroll_layout.count():
@@ -685,6 +814,7 @@ class GeneratorDialog(QDialog):
         self.progress_bar.setVisible(False)
         self.suggest_btn.setEnabled(True)
         self.gen_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.loading_lbl.setText("")
         showWarning(f"Failed to suggest options:\n\n{error_msg}")
         
@@ -706,6 +836,11 @@ class GeneratorDialog(QDialog):
 
     def start_generation(self):
         active_tab = self.tabs.currentIndex()
+        
+        if active_tab == 2:
+            self.create_manual_card()
+            return
+        
         language = self.lang_combo.currentText()
         difficulty = self.diff_combo.currentText()
         grammar_type = self.type_combo.currentText()
@@ -743,12 +878,40 @@ class GeneratorDialog(QDialog):
             
             prompt += "Generate exactly one blank, named blank."
             
+        prompt += (
+            "\n\nCRITICAL QUALITY ASSURANCE AND DISAMBIGUATION WORKFLOW:\n"
+            "You MUST perform the following 3 steps sequentially before returning the exercise. If you fail to do so, the card will be rejected.\n\n"
+            "STEP 1: Lexical Disambiguation\n"
+            "- Determine the exact dictionary lemma of the target word.\n"
+            "- Use the surrounding sentence context to eliminate all alternative lemmas.\n"
+            "- If multiple lemmas share the same surface form, choose the only one that makes semantic and grammatical sense.\n"
+            "- Never generate an exercise until the lemma has been uniquely and confidently identified.\n"
+            "- CRITICAL RULE: If there is ANY uncertainty or ambiguity about the correct lemma, STOP IMMEDIATELY! Do not guess. You must return {\"status\": \"ambiguous\", \"sentence\": \"\", \"language\": \"\", \"difficulty\": \"\", \"grammarType\": \"\", \"blanks\": []} instead of generating an exercise. We prefer no card over an incorrect card.\n\n"
+            "STEP 2: Semantic Validation\n"
+            "- After identifying the lemma, validate that the meaning of the lemma fits perfectly in the sentence.\n"
+            "- For example: For Danish sentence 'Han tog en pause.', the correct lemma is 'tage'. You must reject other lemmas whose meanings do not fit the sentence (like 'tiltage', 'foretage', 'modtage').\n"
+            "- Reject any lemma whose meaning does not fit the sentence. Validate by meaning, not spelling.\n\n"
+            "STEP 3: Distractor Validation\n"
+            "- Before returning the distractors, verify each distractor against these 5 rules:\n"
+            "  1. Is it the same lemma? (All distractors MUST belong to the EXACT SAME dictionary lemma! Not merely a similar spelling, same root, derivationally related, phonetically related, or semantically related. Exactly the same dictionary lemma! No exceptions.)\n"
+            "  2. Is it the same lexical family?\n"
+            "  3. Is it a real word?\n"
+            "  4. Does it fit the intended grammar exercise?\n"
+            "  5. Is it NOT a different dictionary entry?\n"
+            "- If the answer to any of these 5 rules is 'No', you MUST discard that distractor and choose/generate a valid one.\n"
+            "- All distractors MUST belong to the EXACT SAME dictionary lemma.\n"
+            "  - Danish Example: 'tage', 'tog', 'taget', 'tager' are ALLOWED (all belong to lemma 'tage'). 'tiltage', 'foretage', 'modtage' are FORBIDDEN (different lemmas).\n"
+            "  - English Example: 'take', 'takes', 'taking', 'took', 'taken' are ALLOWED (all belong to lemma 'take'). 'take', 'undertake', 'mistake' are FORBIDDEN (different lemmas).\n"
+        )
+            
         prompt += "\n\nCRITICAL: You MUST respond with a raw JSON object matching the following structure. Do not wrap in markdown code blocks starting with three backticks and 'json'.\n"
         prompt += "{\n"
+        prompt += '  "status": "ok" or "ambiguous" (set to "ambiguous" if you had to stop in STEP 1 due to lemma ambiguity or uncertainty, otherwise "ok"),\n'
         prompt += '  "sentence": "The complete sentence containing the blank placeholder(s) like {{blank}} or {{blank1}} and {{blank2}}.",\n'
         prompt += f'  "language": "{language}",\n'
         prompt += f'  "difficulty": "{difficulty}",\n'
         prompt += f'  "grammarType": "{grammar_type}",\n'
+        prompt += '  "cefrReason": "A short 1-2 sentence explanation of why this exercise matches the requested CEFR difficulty level.",\n'
         prompt += '  "blanks": [\n'
         prompt += '    {\n'
         if active_tab == 0 and multi_blank:
@@ -758,12 +921,21 @@ class GeneratorDialog(QDialog):
         prompt += '      "targetWord": "the correct answer for this blank",\n'
         prompt += '      "options": ["the targetWord", "distractor1", "distractor2", ...],\n'
         prompt += '      "hint": "a short hint for this blank",\n'
-        prompt += '      "explanation": "A serialized JSON string mapping each option in options to its specific explanation in the target language being studied (" + language + "). Example: \\"{\\"option1\\": \\"explanation1\\", \\"option2\\": \\"explanation2\\"}\\""\n'
+        prompt += f'      "explanation": "A serialized JSON string mapping each option in options to its specific explanation in the target language being studied ({language}). Example: \\"{{\\"option1\\": \\"explanation1\\", \\"option2\\": \\"explanation2\\"}}\\"",\n'
+        prompt += '      "lemma": "the dictionary base form (lemma) of the target word",\n'
+        prompt += '      "partOfSpeech": "the part of speech of the target word (e.g. verb, noun, adjective)",\n'
+        prompt += '      "grammarPoint": "a short, specific label for the exact grammar rule being tested (more specific than grammarType)",\n'
+        prompt += '      "commonMistake": "a brief note on a common mistake learners make with this word or grammar point",\n'
+        prompt += '      "memoryTip": "a short memory hook or mnemonic to help remember the correct form",\n'
+        prompt += '      "frequency": "how common this word/form is in everyday use (e.g. very common, common, rare)",\n'
+        prompt += '      "register": "the formality register of the target word (e.g. formal, informal, neutral)",\n'
+        prompt += '      "collocations": ["2-4 short common word pairings or phrases that use the target word naturally"]\n'
         prompt += '    }\n'
         prompt += '  ]\n'
         prompt += '}'
             
         self.gen_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
         provider_name = "Gemini" if self.api_provider == "gemini" else "Mistral"
         self.loading_lbl.setText(f"Connecting to {provider_name} API... Analyzing grammar structures and drafting realistic distractors...")
         self.progress_bar.setVisible(True)
@@ -775,37 +947,162 @@ class GeneratorDialog(QDialog):
         self.worker.error.connect(self.on_generation_error)
         self.worker.start()
         
+    def create_manual_card(self):
+        import re
+        
+        sentence_raw = self.manual_sentence_input.toPlainText().strip()
+        multi_blank = self.manual_multi_blank_chk.isChecked()
+        
+        if not sentence_raw:
+            showWarning("Please enter a sentence.")
+            return
+        
+        blank_count = len(re.findall(r'_{3,}', sentence_raw))
+        expected = 2 if multi_blank else 1
+        if blank_count != expected:
+            if multi_blank:
+                showWarning(f"'Two blanks' is checked, so the sentence needs exactly two ___ markers (found {blank_count}).")
+            else:
+                showWarning(f"The sentence needs exactly one ___ marker (found {blank_count}). Check 'This sentence has two blanks' if you want a double blank.")
+            return
+        
+        def build_blank(answer_input, distractors_input, correct_expl_input, incorrect_expl_input, label):
+            answer = answer_input.text().strip()
+            if not answer:
+                showWarning(f"Please enter the correct answer for {label}.")
+                return None
+            distractors = [d.strip() for d in distractors_input.text().split(",") if d.strip()]
+            if not distractors:
+                showWarning(f"Please add at least one wrong option (distractor) for {label}, separated by commas.")
+                return None
+            
+            seen = set()
+            all_options = []
+            for opt in [answer] + distractors:
+                key = opt.strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    all_options.append(opt.strip())
+            
+            correct_expl = correct_expl_input.text().strip()
+            incorrect_expl = incorrect_expl_input.text().strip()
+            expl_data = {}
+            for opt in all_options:
+                expl_data[opt] = correct_expl if opt.lower() == answer.lower() else incorrect_expl
+            
+            return {
+                "target": answer,
+                "options_str": "|".join(all_options),
+                "explanation": json.dumps(expl_data, ensure_ascii=False),
+            }
+        
+        blank1 = build_blank(self.manual_answer1_input, self.manual_distractors1_input,
+                              self.manual_correct_expl1_input, self.manual_incorrect_expl1_input, "Blank 1")
+        if blank1 is None:
+            return
+        
+        if not multi_blank:
+            sentence = re.sub(r'_{3,}', '{{blank}}', sentence_raw, count=1)
+            target_word = blank1["target"]
+            options_str = blank1["options_str"]
+            explanation = blank1["explanation"]
+        else:
+            blank2 = build_blank(self.manual_answer2_input, self.manual_distractors2_input,
+                                  self.manual_correct_expl2_input, self.manual_incorrect_expl2_input, "Blank 2")
+            if blank2 is None:
+                return
+            
+            counter = [0]
+            def repl(m):
+                counter[0] += 1
+                return "{{blank" + str(counter[0]) + "}}"
+            sentence = re.sub(r'_{3,}', repl, sentence_raw, count=2)
+            
+            target_word = blank1["target"] + " || " + blank2["target"]
+            options_str = blank1["options_str"] + " || " + blank2["options_str"]
+            explanation = (f"<strong>Blank 'blank1':</strong> {blank1['explanation']}"
+                            f"<br><br><strong>Blank 'blank2':</strong> {blank2['explanation']}")
+        
+        grammar_type = self.type_combo.currentText()
+        difficulty = self.diff_combo.currentText()
+        language = self.lang_combo.currentText()
+        
+        try:
+            self.save_generated_card(sentence, target_word, options_str, explanation, grammar_type, difficulty, language, "")
+        except Exception as e:
+            showWarning(f"Database write error: {str(e)}")
+        
     def on_generation_success(self, data):
         self.progress_bar.setVisible(False)
+        self.stop_btn.setEnabled(False)
         self.loading_lbl.setText("Success! Card parsed. Saving...")
         
         try:
+            status = data.get("status", "")
+            if status == "ambiguous":
+                self.loading_lbl.setText("Generation stopped: Lemma is ambiguous.")
+                showWarning("The target word lemma is ambiguous in this context or could not be uniquely identified.\n\nGeneration stopped to prevent creating an incorrect card as requested.")
+                self.gen_btn.setEnabled(True)
+                return
+                
             import re
             sentence = data.get("sentence", "")
-            # FIX #4: Changed regex pattern from (d*) to (\d*)
             sentence = re.sub(r'[{]+blank(\d*)[}]+', lambda m: '{{blank' + m.group(1) + '}}', sentence)
             
             blanks = data.get("blanks", [])
+            cefr_reason = data.get("cefrReason", "")
             if len(blanks) == 1:
                 b = blanks[0]
                 target_word = b.get("targetWord", "")
-                options_list = b.get("options", [])
-                if not options_list:
-                    options_list = []
-                options_str = "|".join(options_list)
-                explanation = b.get("explanation", "")
+                options_str = "|".join(b.get("options", []))
+                
+                # Merge SLA fields into the JSON explanation string
+                raw_expl = b.get("explanation", "{}")
+                try:
+                    import json
+                    expl_data = json.loads(raw_expl)
+                except Exception:
+                    expl_data = {}
+                
+                expl_data["_lemma"] = b.get("lemma", "")
+                expl_data["_partOfSpeech"] = b.get("partOfSpeech", "")
+                expl_data["_grammarPoint"] = b.get("grammarPoint", "")
+                expl_data["_commonMistake"] = b.get("commonMistake", "")
+                expl_data["_memoryTip"] = b.get("memoryTip", "")
+                expl_data["_frequency"] = b.get("frequency", "")
+                expl_data["_register"] = b.get("register", "")
+                expl_data["_collocations"] = b.get("collocations", [])
+                expl_data["_cefrReason"] = cefr_reason
+                
+                explanation = json.dumps(expl_data, ensure_ascii=False)
             else:
                 targets = []
                 options_group = []
                 explanations = []
+                import json
                 for b in blanks:
                     targets.append(b.get("targetWord", ""))
-                    opts = b.get("options", [])
-                    if not opts:
-                        opts = []
-                    options_group.append("|".join(opts))
-                    # FIX #7: Added HTML escaping for blankId
-                    explanations.append(f"<strong>Blank '{escape(b.get('blankId', ''))}':</strong> {escape(b.get('explanation', ''))}")
+                    options_group.append("|".join(b.get("options", [])))
+                    
+                    # Merge SLA fields into the JSON explanation string for this blank
+                    raw_expl = b.get("explanation", "{}")
+                    try:
+                        expl_data = json.loads(raw_expl)
+                    except Exception:
+                        expl_data = {}
+                        
+                    expl_data["_lemma"] = b.get("lemma", "")
+                    expl_data["_partOfSpeech"] = b.get("partOfSpeech", "")
+                    expl_data["_grammarPoint"] = b.get("grammarPoint", "")
+                    expl_data["_commonMistake"] = b.get("commonMistake", "")
+                    expl_data["_memoryTip"] = b.get("memoryTip", "")
+                    expl_data["_frequency"] = b.get("frequency", "")
+                    expl_data["_register"] = b.get("register", "")
+                    expl_data["_collocations"] = b.get("collocations", [])
+                    expl_data["_cefrReason"] = cefr_reason
+                    
+                    merged_expl_str = json.dumps(expl_data, ensure_ascii=False)
+                    explanations.append(f"<strong>Blank '{b.get('blankId')}':</strong> {merged_expl_str}")
                     
                 target_word = " || ".join(targets)
                 options_str = " || ".join(options_group)
@@ -815,83 +1112,83 @@ class GeneratorDialog(QDialog):
             difficulty = data.get("difficulty", self.diff_combo.currentText())
             language = data.get("language", self.lang_combo.currentText())
             image_url = data.get("image", "")
-            image_html = f'<img src="{escape(image_url)}">' if image_url else ""
+            image_html = f'<img src="{image_url}">' if image_url else ""
             
-            if self.editor:
-                # Update current note fields directly in the active editor
-                note = self.editor.note
-                fields_set = []
-                for field, val in [
-                    ("Sentence", sentence),
-                    ("TargetWord", target_word),
-                    ("Options", options_str),
-                    ("Explanation", explanation),
-                    ("GrammarType", grammar_type),
-                    ("Difficulty", difficulty),
-                    ("Language", language),
-                    ("FrontAudio", ""),
-                    ("BackAudio", ""),
-                ]:
-                    if field in note:
-                        note[field] = val
-                        fields_set.append(field)
-                
-                # FIX #9: Only set Image field if it exists in the note type
-                if "Image" in note:
-                    note["Image"] = image_html
-                    fields_set.append("Image")
-                
-                # Reload active editor representation to update GUI fields
-                self.editor.loadNote()
-                
-                if fields_set:
-                    showInfo(f"✨ Grammar Trainer card populated successfully!\n\nFields updated: {', '.join(fields_set)}")
-                else:
-                    showInfo("⚠️ Grammar Trainer card generated successfully!\n\nNote: The current note type does not have the expected fields (Sentence, TargetWord, etc.) so they could not be filled automatically.")
-                
-                self.accept()
-                
-            else:
-                col = mw.col
-                note_type = col.models.by_name("Grammar Trainer")
-                if not note_type:
-                    from .note_type import setup_note_type
-                    note_type = setup_note_type()
-                    
-                note = col.new_note(note_type)
-                note["Sentence"] = sentence
-                note["TargetWord"] = target_word
-                note["Options"] = options_str
-                note["Explanation"] = explanation
-                note["GrammarType"] = grammar_type
-                note["Difficulty"] = difficulty
-                note["Language"] = language
-                note["FrontAudio"] = ""
-                note["BackAudio"] = ""
-                # FIX #9: Only set Image field if it exists
-                if "Image" in note:
-                    note["Image"] = image_html
-                
-                # Add to active deck
-                deck_id = mw.col.decks.active()
-                if isinstance(deck_id, list):
-                    deck_id = deck_id[0] if deck_id else 1
-                note.model()["did"] = deck_id
-                mw.col.add_note(note, deck_id)
-                
-                # Reset and show feedback
-                mw.reset()
-                showInfo("✨ Grammar Trainer card created successfully!")
-                self.accept()
+            self.save_generated_card(sentence, target_word, options_str, explanation, grammar_type, difficulty, language, image_html)
                 
         except Exception as e:
             showWarning(f"Database write error: {str(e)}")
             self.gen_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
             self.loading_lbl.setText("")
+            
+    def save_generated_card(self, sentence, target_word, options_str, explanation, grammar_type, difficulty, language, image_html=""):
+        if self.editor:
+            # Update current note fields directly in the active editor
+            note = self.editor.note
+            fields_set = []
+            for field, val in [
+                ("Sentence", sentence),
+                ("TargetWord", target_word),
+                ("Options", options_str),
+                ("Explanation", explanation),
+                ("GrammarType", grammar_type),
+                ("Difficulty", difficulty),
+                ("Language", language),
+                ("FrontAudio", ""),
+                ("BackAudio", ""),
+                ("Image", image_html)
+            ]:
+                if field in note:
+                    note[field] = val
+                    fields_set.append(field)
+            
+            # Reload active editor representation to update GUI fields
+            self.editor.loadNote()
+            
+            if fields_set:
+                showInfo(f"Grammar Trainer card populated successfully!\n\nFields updated: {', '.join(fields_set)}")
+            else:
+                showInfo("Grammar Trainer card generated successfully!\n\nNote: The current note type does not have the expected fields (Sentence, TargetWord, etc.) so they could not be filled automatically.")
+            
+            self.accept()
+            
+        else:
+            col = mw.col
+            note_type = col.models.by_name("Grammar Trainer")
+            if not note_type:
+                from .note_type import setup_note_type
+                note_type = setup_note_type()
+                
+            note = col.new_note(note_type)
+            note["Sentence"] = sentence
+            note["TargetWord"] = target_word
+            note["Options"] = options_str
+            note["Explanation"] = explanation
+            note["GrammarType"] = grammar_type
+            note["Difficulty"] = difficulty
+            note["Language"] = language
+            note["FrontAudio"] = ""
+            note["BackAudio"] = ""
+            if "Image" in note:
+                note["Image"] = image_html
+            
+            # Add to active deck
+            deck_id = mw.col.decks.active()
+            if isinstance(deck_id, list):
+                deck_id = deck_id[0] if deck_id else 1
+            note.model()["did"] = deck_id
+            mw.col.add_note(note, deck_id)
+            
+            # Reset and show feedback
+            mw.reset()
+            showInfo("Grammar Trainer card created successfully!")
+            self.accept()
             
     def on_generation_error(self, error_msg):
         self.progress_bar.setVisible(False)
         self.gen_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
         self.loading_lbl.setText("")
         showWarning(f"Gemini API failure:\n\n{error_msg}\n\nPlease verify your API key in Settings or try again.")
 
