@@ -2,6 +2,7 @@
 import os
 from aqt import mw
 from aqt.qt import *
+from .generator import DEFAULT_AI_PROMPT_TEMPLATE
 
 class ConnectionTester(QThread):
     finished = pyqtSignal(bool, str) # success, message
@@ -242,16 +243,6 @@ class SettingsDialog(QDialog):
         mistral_key_layout.addWidget(self.mistral_test_btn)
         self.mistral_key_widget.setLayout(mistral_key_layout)
         
-        # 4. Default Language ComboBox
-        self.lang_combo = QComboBox()
-        self.lang_combo.addItems(["English", "Danish", "German", "Swedish", "Norwegian", "French", "Spanish", "Italian"])
-        self.lang_combo.setCurrentText(self.config.get("default_language", "English"))
-        
-        # 5. Default Difficulty ComboBox
-        self.diff_combo = QComboBox()
-        self.diff_combo.addItems(["A1", "A2", "B1", "B2", "C1", "C2"])
-        self.diff_combo.setCurrentText(self.config.get("default_difficulty", "A1"))
-        
         # 6. Default Distractors
         self.dist_spin = QSpinBox()
         self.dist_spin.setRange(2, 7)
@@ -269,17 +260,23 @@ class SettingsDialog(QDialog):
         self.show_diff_cb = QCheckBox("Show proficiency difficulty level on cards")
         self.show_diff_cb.setChecked(self.config.get("show_difficulty", False))
         
-        # 10. Show Grammar Type QCheckBox
-        self.show_type_cb = QCheckBox("Show grammar focus type badge on cards")
-        self.show_type_cb.setChecked(self.config.get("show_grammar_type", False))
-        
         # 11. Show Check Answer QCheckBox
         self.show_check_cb = QCheckBox("Show Check Answer button on cards")
         self.show_check_cb.setChecked(self.config.get("show_check_answer", False))
         
-        # 12. Show Hint QCheckBox
-        self.show_hint_cb = QCheckBox("Show Hint button on cards")
-        self.show_hint_cb.setChecked(self.config.get("show_hint", False))
+        # 11b. Show Explanation Background QCheckBox
+        self.show_explanation_bg_cb = QCheckBox("Show background behind the explanation box")
+        self.show_explanation_bg_cb.setChecked(self.config.get("show_explanation_background", False))
+        
+        # 11c. Grammar / Word / Usage / Memory section visibility
+        self.show_grammar_section_cb = QCheckBox("Grammar")
+        self.show_grammar_section_cb.setChecked(self.config.get("show_grammar_section", True))
+        self.show_word_section_cb = QCheckBox("Word")
+        self.show_word_section_cb.setChecked(self.config.get("show_word_section", True))
+        self.show_usage_section_cb = QCheckBox("Usage")
+        self.show_usage_section_cb.setChecked(self.config.get("show_usage_section", True))
+        self.show_memory_section_cb = QCheckBox("Memory")
+        self.show_memory_section_cb.setChecked(self.config.get("show_memory_section", True))
         
         # 13. Card White Background QCheckBox
         self.show_bg_cb = QCheckBox("Display cards with a clean white background container")
@@ -315,12 +312,6 @@ class SettingsDialog(QDialog):
         self.blank_timer_spin.setSuffix("s")
         self.blank_timer_spin.setValue(self.config.get("blank_timer", 0))
 
-        # 20. Hint Reveal Delay QSpinBox
-        self.hint_timer_spin = QSpinBox()
-        self.hint_timer_spin.setRange(0, 90)
-        self.hint_timer_spin.setSuffix("s")
-        self.hint_timer_spin.setValue(self.config.get("hint_timer", 0))
-
         # 21. Auto-Open Dropdown QCheckBox
         self.auto_open_dropdown_cb = QCheckBox("Automatically open dropdown menu when delay timer finishes")
         self.auto_open_dropdown_cb.setChecked(self.config.get("auto_open_dropdown", False))
@@ -328,6 +319,32 @@ class SettingsDialog(QDialog):
         # 22. Keyboard Shortcuts QCheckBox
         self.keyboard_shortcuts_cb = QCheckBox("Enable keyboard shortcuts (number keys 1-9 to open/pick an answer, Enter to check)")
         self.keyboard_shortcuts_cb.setChecked(self.config.get("keyboard_shortcuts", False))
+
+        # 23. AI Prompt (editable)
+        self.prompt_edit = QTextEdit()
+        self.prompt_edit.setPlainText(self.config.get("ai_prompt_template", "").strip() or DEFAULT_AI_PROMPT_TEMPLATE)
+        self.prompt_edit.setMinimumHeight(260)
+        self.prompt_edit.setStyleSheet("font-family: Consolas, Menlo, monospace; font-size: 11px;")
+
+        self.prompt_reset_btn = QPushButton("Reset to Default")
+        self.prompt_reset_btn.setStyleSheet(btn_style)
+        self.prompt_reset_btn.clicked.connect(self.reset_prompt_to_default)
+
+        # 24. Translation mode ComboBox
+        self.translation_mode_combo = QComboBox()
+        self.translation_mode_combo.addItem("Off", "off")
+        self.translation_mode_combo.addItem("Generate translation with AI", "ai")
+        current_translation_mode = self.config.get("translation_mode", "off")
+        idx = self.translation_mode_combo.findData(current_translation_mode)
+        self.translation_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        # 25. Translation position ComboBox
+        self.translation_position_combo = QComboBox()
+        self.translation_position_combo.addItem("Under answer", "under_answer")
+        self.translation_position_combo.addItem("Toolbar icon", "toolbar")
+        current_translation_position = self.config.get("translation_position", "under_answer")
+        pos_idx = self.translation_position_combo.findData(current_translation_position)
+        self.translation_position_combo.setCurrentIndex(pos_idx if pos_idx >= 0 else 0)
  
         # Help components
         self.help_guide_btn = QPushButton("Open Help Guide")
@@ -359,16 +376,17 @@ class SettingsDialog(QDialog):
         general_form.addRow(QLabel("API Provider:"), self.provider_combo)
         general_form.addRow(self.gemini_label, self.gemini_key_widget)
         general_form.addRow(self.mistral_label, self.mistral_key_widget)
-        general_form.addRow(QLabel("Default Language:"), self.lang_combo)
-        general_form.addRow(QLabel("Default Difficulty:"), self.diff_combo)
         general_form.addRow(QLabel("Number of Distractors:"), self.dist_spin)
         general_form.addRow(QLabel("Auto-Flip Card:"), self.auto_flip_cb)
         general_form.addRow(QLabel("Card White BG:"), self.show_bg_cb)
         general_form.addRow(QLabel("Blank Reveal Delay:"), self.blank_timer_spin)
-        general_form.addRow(QLabel("Hint Reveal Delay:"), self.hint_timer_spin)
         general_form.addRow(QLabel("Auto-Open Dropdown:"), self.auto_open_dropdown_cb)
         general_form.addRow(QLabel("Keyboard Shortcuts:"), self.keyboard_shortcuts_cb)
         general_layout.addLayout(general_form)
+        general_note = QLabel("Language, Difficulty and Grammar Topic are chosen directly in the Grammar Trainer generator — your last selections there are remembered automatically.")
+        general_note.setStyleSheet(note_style)
+        general_note.setWordWrap(True)
+        general_layout.addWidget(general_note)
         general_layout.addWidget(self.info_note)
         general_layout.addStretch()
         
@@ -392,11 +410,62 @@ class SettingsDialog(QDialog):
         badges_form = QFormLayout()
         badges_form.addRow(QLabel("Show Language:"), self.show_lang_cb)
         badges_form.addRow(QLabel("Show Difficulty:"), self.show_diff_cb)
-        badges_form.addRow(QLabel("Show Grammar Type:"), self.show_type_cb)
         badges_form.addRow(QLabel("Show Check Answer:"), self.show_check_cb)
-        badges_form.addRow(QLabel("Show Hint:"), self.show_hint_cb)
         badges_layout.addLayout(badges_form)
         badges_layout.addStretch()
+        
+        # Tab: Back Card — controls for optional/secondary content shown after flipping
+        tab_back = QWidget()
+        back_layout = QVBoxLayout(tab_back)
+        back_layout.setContentsMargins(15, 15, 15, 15)
+        back_form = QFormLayout()
+        back_form.addRow(QLabel("Explanation Background:"), self.show_explanation_bg_cb)
+        back_layout.addLayout(back_form)
+        sections_label = QLabel("Extra info sections shown on the back (hidden entirely if unchecked):")
+        sections_label.setStyleSheet(note_style)
+        sections_label.setWordWrap(True)
+        back_layout.addWidget(sections_label)
+        sections_row = QHBoxLayout()
+        sections_row.addWidget(self.show_grammar_section_cb)
+        sections_row.addWidget(self.show_word_section_cb)
+        sections_row.addWidget(self.show_usage_section_cb)
+        sections_row.addWidget(self.show_memory_section_cb)
+        sections_row.addStretch()
+        back_layout.addLayout(sections_row)
+        back_layout.addStretch()
+        
+        # Tab: AI Prompt
+        tab_prompt = QWidget()
+        prompt_layout = QVBoxLayout(tab_prompt)
+        prompt_layout.setContentsMargins(15, 15, 15, 15)
+        prompt_intro = QLabel(
+            "This is the exact prompt sent to the AI when generating a card. You can edit any part of it, "
+            "or replace it entirely. Available placeholders (optional — remove any you don't need):\n"
+            "[[LANGUAGE]], [[DIFFICULTY]], [[GRAMMAR_TYPE]], [[TASK_DETAILS]], [[BLANK_INSTRUCTION]], "
+            "[[DISTRACTOR_COUNT]], [[TOTAL_OPTION_COUNT]], [[TRANSLATION_INSTRUCTION]]"
+        )
+        prompt_intro.setWordWrap(True)
+        prompt_intro.setStyleSheet(note_style)
+        prompt_layout.addWidget(prompt_intro)
+        prompt_layout.addWidget(self.prompt_edit)
+        prompt_btn_row = QHBoxLayout()
+        prompt_btn_row.addWidget(self.prompt_reset_btn)
+        prompt_btn_row.addStretch()
+        prompt_layout.addLayout(prompt_btn_row)
+        
+        # Tab: Translation
+        tab_translation = QWidget()
+        translation_layout = QVBoxLayout(tab_translation)
+        translation_layout.setContentsMargins(15, 15, 15, 15)
+        translation_form = QFormLayout()
+        translation_form.addRow(QLabel("Translation:"), self.translation_mode_combo)
+        translation_form.addRow(QLabel("Position:"), self.translation_position_combo)
+        translation_layout.addLayout(translation_form)
+        translation_note = QLabel("\"Under answer\" shows the translation directly under the answer once the card is flipped. \"Toolbar icon\" keeps it out of the way behind a small icon next to the audio controls instead. Either way, nothing is shown if the Translation field is empty.")
+        translation_note.setStyleSheet(note_style)
+        translation_note.setWordWrap(True)
+        translation_layout.addWidget(translation_note)
+        translation_layout.addStretch()
         
         # Tab 4: Help
         tab_help = QWidget()
@@ -413,6 +482,9 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(tab_general, "General")
         self.tabs.addTab(tab_layout, "Layout")
         self.tabs.addTab(tab_badges, "Badges")
+        self.tabs.addTab(tab_back, "Back Card")
+        self.tabs.addTab(tab_translation, "Translation")
+        self.tabs.addTab(tab_prompt, "AI Prompt")
         self.tabs.addTab(tab_help, "Help")
         
         layout.addWidget(self.tabs)
@@ -536,15 +608,16 @@ class SettingsDialog(QDialog):
         self.config["api_provider"] = self.provider_combo.currentData()
         self.config["api_key"] = self.gemini_key_input.text().strip()
         self.config["mistral_api_key"] = self.mistral_key_input.text().strip()
-        self.config["default_language"] = self.lang_combo.currentText()
-        self.config["default_difficulty"] = self.diff_combo.currentText()
         self.config["default_distractors"] = self.dist_spin.value()
         self.config["auto_flip"] = self.auto_flip_cb.isChecked()
         self.config["show_language"] = self.show_lang_cb.isChecked()
         self.config["show_difficulty"] = self.show_diff_cb.isChecked()
-        self.config["show_grammar_type"] = self.show_type_cb.isChecked()
         self.config["show_check_answer"] = self.show_check_cb.isChecked()
-        self.config["show_hint"] = self.show_hint_cb.isChecked()
+        self.config["show_explanation_background"] = self.show_explanation_bg_cb.isChecked()
+        self.config["show_grammar_section"] = self.show_grammar_section_cb.isChecked()
+        self.config["show_word_section"] = self.show_word_section_cb.isChecked()
+        self.config["show_usage_section"] = self.show_usage_section_cb.isChecked()
+        self.config["show_memory_section"] = self.show_memory_section_cb.isChecked()
         self.config["show_white_background"] = self.show_bg_cb.isChecked()
         self.config["center_horizontal"] = self.center_horiz_cb.isChecked()
         self.config["center_vertical"] = self.center_vert_cb.isChecked()
@@ -552,9 +625,12 @@ class SettingsDialog(QDialog):
         self.config["card_max_width"] = self.card_max_width_spin.value()
         self.config["explanation_align"] = self.explanation_align_combo.currentText()
         self.config["blank_timer"] = self.blank_timer_spin.value()
-        self.config["hint_timer"] = self.hint_timer_spin.value()
         self.config["auto_open_dropdown"] = self.auto_open_dropdown_cb.isChecked()
         self.config["keyboard_shortcuts"] = self.keyboard_shortcuts_cb.isChecked()
+        prompt_text = self.prompt_edit.toPlainText()
+        self.config["ai_prompt_template"] = "" if prompt_text.strip() == DEFAULT_AI_PROMPT_TEMPLATE.strip() else prompt_text
+        self.config["translation_mode"] = self.translation_mode_combo.currentData()
+        self.config["translation_position"] = self.translation_position_combo.currentData()
         
         # Write config persistently
         addon_name = __package__ or __name__.split('.')[0]
@@ -569,6 +645,9 @@ class SettingsDialog(QDialog):
             pass
             
         self.accept()
+
+    def reset_prompt_to_default(self):
+        self.prompt_edit.setPlainText(DEFAULT_AI_PROMPT_TEMPLATE)
 
     def open_help_guide(self):
         dialog = GuideDialog(self)
@@ -589,15 +668,16 @@ class SettingsDialog(QDialog):
             self.provider_combo.setCurrentIndex(0)
             self.gemini_key_input.setText("")
             self.mistral_key_input.setText("")
-            self.lang_combo.setCurrentText("English")
-            self.diff_combo.setCurrentText("A1")
             self.dist_spin.setValue(5)
             self.auto_flip_cb.setChecked(True)
             self.show_lang_cb.setChecked(False)
             self.show_diff_cb.setChecked(False)
-            self.show_type_cb.setChecked(False)
             self.show_check_cb.setChecked(False)
-            self.show_hint_cb.setChecked(False)
+            self.show_explanation_bg_cb.setChecked(False)
+            self.show_grammar_section_cb.setChecked(True)
+            self.show_word_section_cb.setChecked(True)
+            self.show_usage_section_cb.setChecked(True)
+            self.show_memory_section_cb.setChecked(True)
             self.show_bg_cb.setChecked(False)
             self.center_horiz_cb.setChecked(True)
             self.center_vert_cb.setChecked(True)
@@ -605,9 +685,11 @@ class SettingsDialog(QDialog):
             self.card_max_width_spin.setValue(800)
             self.explanation_align_combo.setCurrentText("left")
             self.blank_timer_spin.setValue(0)
-            self.hint_timer_spin.setValue(0)
             self.auto_open_dropdown_cb.setChecked(False)
             self.keyboard_shortcuts_cb.setChecked(False)
+            self.prompt_edit.setPlainText(DEFAULT_AI_PROMPT_TEMPLATE)
+            self.translation_mode_combo.setCurrentIndex(0)
+            self.translation_position_combo.setCurrentIndex(0)
 
 class CollapsibleSection(QWidget):
     def __init__(self, title, content_widget, parent=None):

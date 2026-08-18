@@ -5,12 +5,18 @@
   "default_language": "English",
   "default_difficulty": "A1",
   "default_distractors": 5,
+  "last_language": "",
+  "last_difficulty": "",
+  "last_grammar_type": "",
   "auto_flip": true,
   "show_language": false,
   "show_difficulty": false,
-  "show_grammar_type": false,
-  "show_hint": false,
   "show_check_answer": false,
+  "show_explanation_background": false,
+  "show_grammar_section": true,
+  "show_word_section": true,
+  "show_usage_section": true,
+  "show_memory_section": true,
   "show_white_background": false,
   "center_horizontal": true,
   "center_vertical": true,
@@ -18,7 +24,9 @@
   "card_max_width": 800,
   "explanation_align": "left",
   "blank_timer": 0,
-  "hint_timer": 0,
   "auto_open_dropdown": false,
-  "keyboard_shortcuts": false
-} 
+  "keyboard_shortcuts": false,
+  "ai_prompt_template": "",
+  "translation_mode": "off",
+  "translation_position": "under_answer"
+}

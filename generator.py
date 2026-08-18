@@ -6,6 +6,92 @@ from aqt import mw
 from aqt.qt import *
 from aqt.utils import showInfo, showWarning
 
+# ---------------------------------------------------------------------------
+# Editable AI prompt (Settings -> AI Prompt tab)
+#
+# The tokens below (double square brackets) are substituted by the add-on
+# before the prompt is sent to the AI. They can be reordered, reworded around,
+# or removed if you don't need that piece of information — removing a token
+# simply omits that content, it will not cause an error.
+#
+#   [[LANGUAGE]]            Target language (e.g. Danish)
+#   [[DIFFICULTY]]          CEFR difficulty (e.g. B1)
+#   [[GRAMMAR_TYPE]]        Grammar topic selected in the generator
+#   [[TASK_DETAILS]]        What sentence/options to build the exercise from
+#   [[BLANK_INSTRUCTION]]   How many blanks to generate and how to name them
+#   [[DISTRACTOR_COUNT]]    Number of wrong options requested per blank
+#   [[TOTAL_OPTION_COUNT]]  Total options per blank (distractors + 1)
+#   [[TRANSLATION_INSTRUCTION]]  Instruction for generating a translation
+#                                 (empty when translation generation is off)
+# ---------------------------------------------------------------------------
+DEFAULT_AI_PROMPT_TEMPLATE = (
+    "Create a grammar dropdown cloze exercise. Language: [[LANGUAGE]], Difficulty: [[DIFFICULTY]], Grammar Category: [[GRAMMAR_TYPE]].\n"
+    "[[TASK_DETAILS]]\n"
+    "Generate exactly [[DISTRACTOR_COUNT]] smart distractors (total options: [[TOTAL_OPTION_COUNT]]) for each blank.\n"
+    "[[BLANK_INSTRUCTION]]\n"
+    "[[TRANSLATION_INSTRUCTION]]\n"
+    "\nCRITICAL QUALITY ASSURANCE AND DISAMBIGUATION WORKFLOW:\n"
+    "You MUST perform the following 3 steps sequentially before returning the exercise. If you fail to do so, the card will be rejected.\n\n"
+    "STEP 1: Lexical Disambiguation\n"
+    "- Determine the exact dictionary lemma of the target word.\n"
+    "- Use the surrounding sentence context to eliminate all alternative lemmas.\n"
+    "- If multiple lemmas share the same surface form, choose the only one that makes semantic and grammatical sense.\n"
+    "- Never generate an exercise until the lemma has been uniquely and confidently identified.\n"
+    "- CRITICAL RULE: If there is ANY uncertainty or ambiguity about the correct lemma, STOP IMMEDIATELY! Do not guess. You must return {\"status\": \"ambiguous\", \"sentence\": \"\", \"language\": \"\", \"difficulty\": \"\", \"grammarType\": \"\", \"blanks\": []} instead of generating an exercise. We prefer no card over an incorrect card.\n\n"
+    "STEP 2: Semantic Validation\n"
+    "- After identifying the lemma, validate that the meaning of the lemma fits perfectly in the sentence.\n"
+    "- For example: For Danish sentence 'Han tog en pause.', the correct lemma is 'tage'. You must reject other lemmas whose meanings do not fit the sentence (like 'tiltage', 'foretage', 'modtage').\n"
+    "- Reject any lemma whose meaning does not fit the sentence. Validate by meaning, not spelling.\n\n"
+    "STEP 3: Distractor Validation\n"
+    "- Before returning the distractors, verify each distractor against these 5 rules:\n"
+    "  1. Is it the same lemma? (All distractors MUST belong to the EXACT SAME dictionary lemma! Not merely a similar spelling, same root, derivationally related, phonetically related, or semantically related. Exactly the same dictionary lemma! No exceptions.)\n"
+    "  2. Is it the same lexical family?\n"
+    "  3. Is it a real word?\n"
+    "  4. Does it fit the intended grammar exercise?\n"
+    "  5. Is it NOT a different dictionary entry?\n"
+    "- If the answer to any of these 5 rules is 'No', you MUST discard that distractor and choose/generate a valid one.\n"
+    "- All distractors MUST belong to the EXACT SAME dictionary lemma.\n"
+    "  - Danish Example: 'tage', 'tog', 'taget', 'tager' are ALLOWED (all belong to lemma 'tage'). 'tiltage', 'foretage', 'modtage' are FORBIDDEN (different lemmas).\n"
+    "  - English Example: 'take', 'takes', 'taking', 'took', 'taken' are ALLOWED (all belong to lemma 'take'). 'take', 'undertake', 'mistake' are FORBIDDEN (different lemmas).\n"
+    "\nCRITICAL: You MUST respond with a raw JSON object matching the following structure. Do not wrap in markdown code blocks starting with three backticks and 'json'.\n"
+    "{\n"
+    "  \"status\": \"ok\" or \"ambiguous\" (set to \"ambiguous\" if you had to stop in STEP 1 due to lemma ambiguity or uncertainty, otherwise \"ok\"),\n"
+    "  \"sentence\": \"The complete sentence containing the blank placeholder(s) like {{blank}} or {{blank1}} and {{blank2}}. Do NOT put anything else inside the double braces, no hints, no answers, just the bare placeholder — the add-on inserts hints itself.\",\n"
+    "  \"language\": \"[[LANGUAGE]]\",\n"
+    "  \"difficulty\": \"[[DIFFICULTY]]\",\n"
+    "  \"grammarType\": \"[[GRAMMAR_TYPE]]\",\n"
+    "  \"cefrReason\": \"A short 1-2 sentence explanation of why this exercise matches the requested CEFR difficulty level.\",\n"
+    "  \"translation\": \"An accurate, natural English translation of the complete sentence with the blank(s) correctly filled in. Leave this as an empty string if no translation was requested.\",\n"
+    "  \"blanks\": [\n"
+    "    {\n"
+    "      \"blankId\": \"blank\" (or \"blank1\"/\"blank2\" for multi-blank exercises),\n"
+    "      \"targetWord\": \"the correct answer for this blank\",\n"
+    "      \"options\": [\"the targetWord\", \"distractor1\", \"distractor2\", ...],\n"
+    "      \"hint\": \"A short, helpful hint for this blank shown INLINE on the front next to the blank before the learner answers, similar to a native Anki cloze hint. Good hints are a short native-language gloss, a synonym, or a light grammatical cue — never the answer itself. Leave empty if no useful hint exists.\",\n"
+    "      \"explanation\": \"A serialized JSON string mapping each option in options to its specific explanation in the target language being studied ([[LANGUAGE]]). Example: \\\"{\\\"option1\\\": \\\"explanation1\\\", \\\"option2\\\": \\\"explanation2\\\"}\\\"\",\n"
+    "      \"lemma\": \"the dictionary base form (lemma) of the target word\",\n"
+    "      \"partOfSpeech\": \"the part of speech of the target word (e.g. verb, noun, adjective)\",\n"
+    "      \"grammarPoint\": \"a short, specific label for the exact grammar rule being tested (more specific than grammarType)\",\n"
+    "      \"commonMistake\": \"a brief note on a common mistake learners make with this word or grammar point\",\n"
+    "      \"memoryTip\": \"a short memory hook or mnemonic to help remember the correct form\",\n"
+    "      \"frequency\": \"how common this word/form is in everyday use (e.g. very common, common, rare)\",\n"
+    "      \"register\": \"the formality register of the target word (e.g. formal, informal, neutral)\",\n"
+    "      \"collocations\": [\"2-4 short common word pairings or phrases that use the target word naturally\"]\n"
+    "    }\n"
+    "  ]\n"
+    "}"
+)
+
+def build_ai_prompt(template, tokens):
+    # Substitute [[TOKEN]] placeholders in the (possibly user-edited) prompt
+    # template. Uses plain text replacement (not str.format) so the JSON/cloze
+    # curly-brace syntax in the prompt is never mistaken for a format field.
+    # Unknown/removed tokens are simply left out of the final prompt.
+    prompt = template
+    for key, val in tokens.items():
+        prompt = prompt.replace("[[" + key + "]]", val)
+    return prompt
+
 class GeminiWorker(QThread):
     finished = pyqtSignal(dict)
     error = pyqtSignal(str)
@@ -36,6 +122,7 @@ class GeminiWorker(QThread):
                 "difficulty": {"type": "string"},
                 "grammarType": {"type": "string"},
                 "cefrReason": {"type": "string"},
+                "translation": {"type": "string"},
                 "blanks": {
                     "type": "array",
                     "items": {
@@ -520,13 +607,19 @@ class GeneratorDialog(QDialog):
         grid.addWidget(QLabel("Language:"), 0, 0)
         self.lang_combo = QComboBox()
         self.lang_combo.addItems(["English", "Danish", "German", "Swedish", "Norwegian", "French", "Spanish", "Italian"])
-        self.lang_combo.setCurrentText(self.config.get("default_language", "English"))
+        self.lang_combo.setCurrentText(
+            self.config.get("last_language", "") or self.config.get("default_language", "English")
+        )
+        self.lang_combo.currentTextChanged.connect(self.remember_last_selection)
         grid.addWidget(self.lang_combo, 0, 1)
         
         grid.addWidget(QLabel("Difficulty:"), 0, 2)
         self.diff_combo = QComboBox()
         self.diff_combo.addItems(["A1", "A2", "B1", "B2", "C1", "C2"])
-        self.diff_combo.setCurrentText(self.config.get("default_difficulty", "A1"))
+        self.diff_combo.setCurrentText(
+            self.config.get("last_difficulty", "") or self.config.get("default_difficulty", "A1")
+        )
+        self.diff_combo.currentTextChanged.connect(self.remember_last_selection)
         grid.addWidget(self.diff_combo, 0, 3)
         
         grid.addWidget(QLabel("Grammar Topic:"), 1, 0)
@@ -536,6 +629,10 @@ class GeneratorDialog(QDialog):
             "Word Order", "Tense Selection", "Modal Verbs", "Conjunctions", "Question Formation", "Negation",
             "Passive Voice", "Relative Pronouns", "Fixed Expressions", "Sentence Connectors", "Word Choice", "Idioms"
         ])
+        last_grammar = self.config.get("last_grammar_type", "")
+        if last_grammar and self.type_combo.findText(last_grammar) >= 0:
+            self.type_combo.setCurrentText(last_grammar)
+        self.type_combo.currentTextChanged.connect(self.remember_last_selection)
         grid.addWidget(self.type_combo, 1, 1)
         
         grid.addWidget(QLabel("Distractors:"), 1, 2)
@@ -648,6 +745,9 @@ class GeneratorDialog(QDialog):
         self.manual_distractors1_input = QLineEdit()
         self.manual_distractors1_input.setPlaceholderText("e.g. forarg, forarger, forargede")
         blank1_form.addRow("Wrong options (comma separated):", self.manual_distractors1_input)
+        self.manual_hint1_input = QLineEdit()
+        self.manual_hint1_input.setPlaceholderText("Optional — shown inline on the front, next to the blank")
+        blank1_form.addRow("Hint (optional):", self.manual_hint1_input)
         self.manual_correct_expl1_input = QLineEdit()
         self.manual_correct_expl1_input.setPlaceholderText("Optional — shown when the correct answer is picked")
         blank1_form.addRow("Why it's correct (optional):", self.manual_correct_expl1_input)
@@ -665,6 +765,9 @@ class GeneratorDialog(QDialog):
         self.manual_distractors2_input = QLineEdit()
         self.manual_distractors2_input.setPlaceholderText("e.g. lærer, lære, lærende")
         blank2_form.addRow("Wrong options (comma separated):", self.manual_distractors2_input)
+        self.manual_hint2_input = QLineEdit()
+        self.manual_hint2_input.setPlaceholderText("Optional — shown inline on the front, next to the blank")
+        blank2_form.addRow("Hint (optional):", self.manual_hint2_input)
         self.manual_correct_expl2_input = QLineEdit()
         self.manual_correct_expl2_input.setPlaceholderText("Optional — shown when the correct answer is picked")
         blank2_form.addRow("Why it's correct (optional):", self.manual_correct_expl2_input)
@@ -726,6 +829,18 @@ class GeneratorDialog(QDialog):
         
         self.setLayout(layout)
         
+    def remember_last_selection(self, *_args):
+        # Persist the current Language/Difficulty/Grammar Topic so the
+        # generator reopens with the same selection next time.
+        self.config["last_language"] = self.lang_combo.currentText()
+        self.config["last_difficulty"] = self.diff_combo.currentText()
+        self.config["last_grammar_type"] = self.type_combo.currentText()
+        addon_name = __package__ or __name__.split('.')[0]
+        try:
+            mw.addonManager.writeConfig(addon_name, self.config)
+        except Exception:
+            pass
+
     def stop_active_workers(self):
         # Stop worker if running
         if hasattr(self, "worker") and self.worker and self.worker.isRunning():
@@ -850,18 +965,15 @@ class GeneratorDialog(QDialog):
             sentence = self.sentence_input.toPlainText().strip()
             multi_blank = self.multi_blank_chk.isChecked()
             
-            # Prompt formulation
-            prompt = f"Create a grammar dropdown cloze exercise. Language: {language}, Difficulty: {difficulty}, Grammar Category: {grammar_type}."
             if sentence:
-                prompt += f" Create options and explanations based on the user sentence: '{sentence}'."
+                task_details = f"Create options and explanations based on the user sentence: '{sentence}'."
             else:
-                prompt += f" Create a brand new sentence from scratch."
+                task_details = "Create a brand new sentence from scratch."
             
-            prompt += f" Generate exactly {dist_count} smart distractors (total options: {dist_count + 1}) for each blank."
             if multi_blank:
-                prompt += " Generate exactly two blanks, named blank1 and blank2."
+                blank_instruction = "Generate exactly two blanks, named blank1 and blank2."
             else:
-                prompt += " Generate exactly one blank, named blank."
+                blank_instruction = "Generate exactly one blank, named blank."
         else:
             sentence = self.step3_sentence_input.toPlainText().strip()
             options_str = self.final_options_input.text().strip()
@@ -869,70 +981,34 @@ class GeneratorDialog(QDialog):
                 showWarning("Please suggest and select options in Tab 2 first before generating a card.")
                 return
                 
-            prompt = f"Create a grammar dropdown cloze exercise. Language: {language}, Difficulty: {difficulty}, Grammar Category: {grammar_type}.\n\n"
-            prompt += f"You MUST use the following word options for the cloze drop-down list: {options_str.replace('|', ', ')}.\n"
+            task_details = f"You MUST use the following word options for the cloze drop-down list: {options_str.replace('|', ', ')}.\n"
             if sentence:
-                prompt += f"Generate the exercise based on this custom target sentence context: '{sentence}', replacing the target word with {{{{blank}}}}.\n"
+                task_details += f"Generate the exercise based on this custom target sentence context: '{sentence}', replacing the target word with {{{{blank}}}}."
             else:
-                prompt += "Create a brand new natural sentence from scratch that uses one of the provided options as the correct answer, and the other options as dropdown distractors.\n"
+                task_details += "Create a brand new natural sentence from scratch that uses one of the provided options as the correct answer, and the other options as dropdown distractors."
             
-            prompt += "Generate exactly one blank, named blank."
-            
-        prompt += (
-            "\n\nCRITICAL QUALITY ASSURANCE AND DISAMBIGUATION WORKFLOW:\n"
-            "You MUST perform the following 3 steps sequentially before returning the exercise. If you fail to do so, the card will be rejected.\n\n"
-            "STEP 1: Lexical Disambiguation\n"
-            "- Determine the exact dictionary lemma of the target word.\n"
-            "- Use the surrounding sentence context to eliminate all alternative lemmas.\n"
-            "- If multiple lemmas share the same surface form, choose the only one that makes semantic and grammatical sense.\n"
-            "- Never generate an exercise until the lemma has been uniquely and confidently identified.\n"
-            "- CRITICAL RULE: If there is ANY uncertainty or ambiguity about the correct lemma, STOP IMMEDIATELY! Do not guess. You must return {\"status\": \"ambiguous\", \"sentence\": \"\", \"language\": \"\", \"difficulty\": \"\", \"grammarType\": \"\", \"blanks\": []} instead of generating an exercise. We prefer no card over an incorrect card.\n\n"
-            "STEP 2: Semantic Validation\n"
-            "- After identifying the lemma, validate that the meaning of the lemma fits perfectly in the sentence.\n"
-            "- For example: For Danish sentence 'Han tog en pause.', the correct lemma is 'tage'. You must reject other lemmas whose meanings do not fit the sentence (like 'tiltage', 'foretage', 'modtage').\n"
-            "- Reject any lemma whose meaning does not fit the sentence. Validate by meaning, not spelling.\n\n"
-            "STEP 3: Distractor Validation\n"
-            "- Before returning the distractors, verify each distractor against these 5 rules:\n"
-            "  1. Is it the same lemma? (All distractors MUST belong to the EXACT SAME dictionary lemma! Not merely a similar spelling, same root, derivationally related, phonetically related, or semantically related. Exactly the same dictionary lemma! No exceptions.)\n"
-            "  2. Is it the same lexical family?\n"
-            "  3. Is it a real word?\n"
-            "  4. Does it fit the intended grammar exercise?\n"
-            "  5. Is it NOT a different dictionary entry?\n"
-            "- If the answer to any of these 5 rules is 'No', you MUST discard that distractor and choose/generate a valid one.\n"
-            "- All distractors MUST belong to the EXACT SAME dictionary lemma.\n"
-            "  - Danish Example: 'tage', 'tog', 'taget', 'tager' are ALLOWED (all belong to lemma 'tage'). 'tiltage', 'foretage', 'modtage' are FORBIDDEN (different lemmas).\n"
-            "  - English Example: 'take', 'takes', 'taking', 'took', 'taken' are ALLOWED (all belong to lemma 'take'). 'take', 'undertake', 'mistake' are FORBIDDEN (different lemmas).\n"
-        )
-            
-        prompt += "\n\nCRITICAL: You MUST respond with a raw JSON object matching the following structure. Do not wrap in markdown code blocks starting with three backticks and 'json'.\n"
-        prompt += "{\n"
-        prompt += '  "status": "ok" or "ambiguous" (set to "ambiguous" if you had to stop in STEP 1 due to lemma ambiguity or uncertainty, otherwise "ok"),\n'
-        prompt += '  "sentence": "The complete sentence containing the blank placeholder(s) like {{blank}} or {{blank1}} and {{blank2}}.",\n'
-        prompt += f'  "language": "{language}",\n'
-        prompt += f'  "difficulty": "{difficulty}",\n'
-        prompt += f'  "grammarType": "{grammar_type}",\n'
-        prompt += '  "cefrReason": "A short 1-2 sentence explanation of why this exercise matches the requested CEFR difficulty level.",\n'
-        prompt += '  "blanks": [\n'
-        prompt += '    {\n'
-        if active_tab == 0 and multi_blank:
-            prompt += '      "blankId": "blank1" or "blank2",\n'
+            blank_instruction = "Generate exactly one blank, named blank."
+
+        translation_mode = self.config.get("translation_mode", "off")
+        if translation_mode == "ai":
+            translation_instruction = (
+                "Also provide an accurate, natural English translation of the complete sentence "
+                "(with the blank(s) correctly filled in) in the \"translation\" field."
+            )
         else:
-            prompt += '      "blankId": "blank",\n'
-        prompt += '      "targetWord": "the correct answer for this blank",\n'
-        prompt += '      "options": ["the targetWord", "distractor1", "distractor2", ...],\n'
-        prompt += '      "hint": "a short hint for this blank",\n'
-        prompt += f'      "explanation": "A serialized JSON string mapping each option in options to its specific explanation in the target language being studied ({language}). Example: \\"{{\\"option1\\": \\"explanation1\\", \\"option2\\": \\"explanation2\\"}}\\"",\n'
-        prompt += '      "lemma": "the dictionary base form (lemma) of the target word",\n'
-        prompt += '      "partOfSpeech": "the part of speech of the target word (e.g. verb, noun, adjective)",\n'
-        prompt += '      "grammarPoint": "a short, specific label for the exact grammar rule being tested (more specific than grammarType)",\n'
-        prompt += '      "commonMistake": "a brief note on a common mistake learners make with this word or grammar point",\n'
-        prompt += '      "memoryTip": "a short memory hook or mnemonic to help remember the correct form",\n'
-        prompt += '      "frequency": "how common this word/form is in everyday use (e.g. very common, common, rare)",\n'
-        prompt += '      "register": "the formality register of the target word (e.g. formal, informal, neutral)",\n'
-        prompt += '      "collocations": ["2-4 short common word pairings or phrases that use the target word naturally"]\n'
-        prompt += '    }\n'
-        prompt += '  ]\n'
-        prompt += '}'
+            translation_instruction = "Leave the \"translation\" field as an empty string."
+
+        template = self.config.get("ai_prompt_template", "").strip() or DEFAULT_AI_PROMPT_TEMPLATE
+        prompt = build_ai_prompt(template, {
+            "LANGUAGE": language,
+            "DIFFICULTY": difficulty,
+            "GRAMMAR_TYPE": grammar_type,
+            "TASK_DETAILS": task_details,
+            "BLANK_INSTRUCTION": blank_instruction,
+            "DISTRACTOR_COUNT": str(dist_count),
+            "TOTAL_OPTION_COUNT": str(dist_count + 1),
+            "TRANSLATION_INSTRUCTION": translation_instruction,
+        })
             
         self.gen_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -966,7 +1042,7 @@ class GeneratorDialog(QDialog):
                 showWarning(f"The sentence needs exactly one ___ marker (found {blank_count}). Check 'This sentence has two blanks' if you want a double blank.")
             return
         
-        def build_blank(answer_input, distractors_input, correct_expl_input, incorrect_expl_input, label):
+        def build_blank(answer_input, distractors_input, hint_input, correct_expl_input, incorrect_expl_input, label):
             answer = answer_input.text().strip()
             if not answer:
                 showWarning(f"Please enter the correct answer for {label}.")
@@ -989,33 +1065,44 @@ class GeneratorDialog(QDialog):
             expl_data = {}
             for opt in all_options:
                 expl_data[opt] = correct_expl if opt.lower() == answer.lower() else incorrect_expl
+
+            hint = hint_input.text().strip()
+            hint = hint.replace("{", "").replace("}", "").replace("::", ":")
             
             return {
                 "target": answer,
                 "options_str": "|".join(all_options),
                 "explanation": json.dumps(expl_data, ensure_ascii=False),
+                "hint": hint,
             }
         
-        blank1 = build_blank(self.manual_answer1_input, self.manual_distractors1_input,
+        blank1 = build_blank(self.manual_answer1_input, self.manual_distractors1_input, self.manual_hint1_input,
                               self.manual_correct_expl1_input, self.manual_incorrect_expl1_input, "Blank 1")
         if blank1 is None:
             return
         
         if not multi_blank:
-            sentence = re.sub(r'_{3,}', '{{blank}}', sentence_raw, count=1)
+            hint1 = blank1["hint"]
+            def repl_single(m):
+                return "{{blank::" + hint1 + "}}" if hint1 else "{{blank}}"
+            sentence = re.sub(r'_{3,}', repl_single, sentence_raw, count=1)
             target_word = blank1["target"]
             options_str = blank1["options_str"]
             explanation = blank1["explanation"]
         else:
-            blank2 = build_blank(self.manual_answer2_input, self.manual_distractors2_input,
+            blank2 = build_blank(self.manual_answer2_input, self.manual_distractors2_input, self.manual_hint2_input,
                                   self.manual_correct_expl2_input, self.manual_incorrect_expl2_input, "Blank 2")
             if blank2 is None:
                 return
             
+            blanks_in_order = [blank1, blank2]
             counter = [0]
             def repl(m):
+                idx = counter[0]
                 counter[0] += 1
-                return "{{blank" + str(counter[0]) + "}}"
+                blank_id = "blank" + str(idx + 1)
+                hint = blanks_in_order[idx]["hint"]
+                return "{{" + blank_id + "::" + hint + "}}" if hint else "{{" + blank_id + "}}"
             sentence = re.sub(r'_{3,}', repl, sentence_raw, count=2)
             
             target_word = blank1["target"] + " || " + blank2["target"]
@@ -1028,7 +1115,7 @@ class GeneratorDialog(QDialog):
         language = self.lang_combo.currentText()
         
         try:
-            self.save_generated_card(sentence, target_word, options_str, explanation, grammar_type, difficulty, language, "")
+            self.save_generated_card(sentence, target_word, options_str, explanation, grammar_type, difficulty, language, "", "")
         except Exception as e:
             showWarning(f"Database write error: {str(e)}")
         
@@ -1051,6 +1138,21 @@ class GeneratorDialog(QDialog):
             
             blanks = data.get("blanks", [])
             cefr_reason = data.get("cefrReason", "")
+
+            # Embed each blank's AI-provided hint into the sentence using
+            # Anki-style cloze hint syntax: {{blank::hint}} / {{blank1::hint}}.
+            # If a blank has no hint, its placeholder stays as plain {{blank}}.
+            for b in blanks:
+                hint = (b.get("hint") or "").strip()
+                if not hint:
+                    continue
+                # Cloze hint text must not contain the token delimiters themselves.
+                safe_hint = hint.replace("{", "").replace("}", "").replace("::", ":")
+                blank_id = b.get("blankId") or "blank"
+                plain_token = "{{" + blank_id + "}}"
+                hinted_token = "{{" + blank_id + "::" + safe_hint + "}}"
+                if plain_token in sentence:
+                    sentence = sentence.replace(plain_token, hinted_token, 1)
             if len(blanks) == 1:
                 b = blanks[0]
                 target_word = b.get("targetWord", "")
@@ -1113,8 +1215,12 @@ class GeneratorDialog(QDialog):
             language = data.get("language", self.lang_combo.currentText())
             image_url = data.get("image", "")
             image_html = f'<img src="{image_url}">' if image_url else ""
+
+            translation = ""
+            if self.config.get("translation_mode", "off") == "ai":
+                translation = (data.get("translation") or "").strip()
             
-            self.save_generated_card(sentence, target_word, options_str, explanation, grammar_type, difficulty, language, image_html)
+            self.save_generated_card(sentence, target_word, options_str, explanation, grammar_type, difficulty, language, image_html, translation)
                 
         except Exception as e:
             showWarning(f"Database write error: {str(e)}")
@@ -1122,7 +1228,7 @@ class GeneratorDialog(QDialog):
             self.stop_btn.setEnabled(False)
             self.loading_lbl.setText("")
             
-    def save_generated_card(self, sentence, target_word, options_str, explanation, grammar_type, difficulty, language, image_html=""):
+    def save_generated_card(self, sentence, target_word, options_str, explanation, grammar_type, difficulty, language, image_html="", translation=""):
         if self.editor:
             # Update current note fields directly in the active editor
             note = self.editor.note
@@ -1137,7 +1243,8 @@ class GeneratorDialog(QDialog):
                 ("Language", language),
                 ("FrontAudio", ""),
                 ("BackAudio", ""),
-                ("Image", image_html)
+                ("Image", image_html),
+                ("Translation", translation)
             ]:
                 if field in note:
                     note[field] = val
@@ -1172,6 +1279,8 @@ class GeneratorDialog(QDialog):
             note["BackAudio"] = ""
             if "Image" in note:
                 note["Image"] = image_html
+            if "Translation" in note:
+                note["Translation"] = translation
             
             # Add to active deck
             deck_id = mw.col.decks.active()
