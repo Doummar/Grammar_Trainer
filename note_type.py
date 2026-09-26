@@ -68,6 +68,15 @@ function safeStorageSet(key, val) {
   try { sessionStorage.setItem(key, val); } catch (e) { _gtMemStore[key] = val; }
 }
 
+// Holds whatever selection was already sitting in storage for this card at
+// the moment *this page* started loading, captured once (see initDropdowns)
+// before anything on this page can be clicked. isBackSide===true rendering
+// reads the selection from here rather than from storage directly, so a
+// user's own fresh selection on this page - always written straight to
+// storage by dropdownChanged() - can never be raced by the capture step.
+var _gtCarriedSelections = null;
+var _gtCaptureDone = false;
+
 function initDropdowns() {
   var sentenceArea = document.getElementById("sentence-container");
   var targetEl = document.getElementById("target-raw");
@@ -101,6 +110,32 @@ function initDropdowns() {
   }
   var pristineHtml = sentenceArea._gtPristineHTML;
   var isBackSide = (document.getElementById("answer") !== null);
+
+  // A previous visit's selection must not leak into a new visit to the same
+  // card, but it must still survive the front -> back flip of *this* visit
+  // (checkAnkiAnswers/formatAnkiExplanation need it). This page - whether it
+  // ends up being a front-only load or turns out to be the back (which
+  // starts by misleadingly looking like the front too, see the comment
+  // above) - captures whatever is currently in storage for this card
+  // *once*, immediately, before renderInteractiveBlanks() below creates any
+  // dropdown a user could possibly click. That ordering is what makes this
+  // safe: nothing on this page has had a chance to write a fresh selection
+  // yet, so what's captured here can only be left over from an earlier,
+  // now-finished page (an earlier visit, or - for a real back page - the
+  // front phase of this same visit, whose write is already done and gone
+  // before this page even started loading). Storage is cleared right after
+  // capturing, so a front-only page starts and stays clean, while a real
+  // back page renders from the captured copy instead of storage (see
+  // createDropdownHTML/restoreSelectedState/formatAnkiExplanation).
+  if (!_gtCaptureDone) {
+    _gtCaptureDone = true;
+    _gtCarriedSelections = {};
+    var _gtCaptureKey = getCardKey();
+    for (var _gtCaptureI = 0; _gtCaptureI < targets.length; _gtCaptureI++) {
+      _gtCarriedSelections[_gtCaptureI] = safeStorageGet(_gtCaptureKey + "-sel-" + _gtCaptureI) || "";
+      safeStorageSet(_gtCaptureKey + "-sel-" + _gtCaptureI, "");
+    }
+  }
 
   try {
     renderInteractiveBlanks(sentenceArea, pristineHtml, targets, optionsGroup, isBackSide);
@@ -155,7 +190,7 @@ function renderInteractiveBlanks(sentenceArea, pristineHtml, targets, optionsGro
   for (var s = 0; s < targets.length; s++) {
     setupCustomDropdown(s);
   }
-  restoreSelectedState();
+  restoreSelectedState(isBackSide);
 
   // Run blank delay timer if any
   var config = window.AI_GRAMMAR_CONFIG || {};
@@ -336,7 +371,7 @@ function createDropdownHTML(index, options, hint, isBackSideParam) {
   html += '<span class="dropdown-wrapper" id="dropdown-wrapper-' + index + '">';
   html += timerHtml;
   
-  var storedVal = safeStorageGet(getCardKey() + "-sel-" + index) || "";
+  var storedVal = isBackSide ? ((_gtCarriedSelections && _gtCarriedSelections[index]) || "") : "";
   var extraClass = "";
   if (isBackSide) {
     var targetWord = _correctAnswers[index];
@@ -644,10 +679,16 @@ function dropdownChanged(index) {
   }
 }
 
-function restoreSelectedState() {
+function restoreSelectedState(isBackSide) {
+  // Only the back side is allowed to redisplay a stored selection (it needs
+  // it for correct/incorrect grading). A front-side pass must never surface
+  // a previous selection here, whether it's this card's genuine first
+  // front render or the front-embedded pass that a real back-side load
+  // also briefly (and misleadingly) looks like - see initDropdowns().
+  if (!isBackSide) return;
   for (var i = 0; i < _correctAnswers.length; i++) {
     var select = document.getElementById("blank-select-" + i);
-    var savedVal = safeStorageGet(getCardKey() + "-sel-" + i);
+    var savedVal = (_gtCarriedSelections && _gtCarriedSelections[i]) || "";
     if (select && savedVal) {
       select.value = savedVal;
     }
@@ -771,7 +812,7 @@ function formatAnkiExplanation() {
     
     for (var i = 0; i < _correctAnswers.length; i++) {
       var correct = _correctAnswers[i] || "";
-      var selected = safeStorageGet(getCardKey() + "-sel-" + i) || "";
+      var selected = (_gtCarriedSelections && _gtCarriedSelections[i]) || "";
       
       var parsedBlock = jsonMatches[i] || jsonMatches[0];
       if (!parsedBlock) continue;
