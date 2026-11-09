@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
+import logging
 import os
 from aqt import mw
 from aqt.qt import *
 from .generator import DEFAULT_AI_PROMPT_TEMPLATE
+from .note_type import resolve_display_positions
+
+logger = logging.getLogger(__name__)
 
 class ConnectionTester(QThread):
     finished = pyqtSignal(bool, str) # success, message
@@ -17,13 +21,6 @@ class ConnectionTester(QThread):
         import urllib.error
         import json
         import time
-        import ssl
-        
-        try:
-            ssl_context = ssl._create_unverified_context()
-        except Exception:
-            ssl_context = None
-        
         if not self.api_key:
             self.finished.emit(False, "API Key is empty. Please enter an API key.")
             return
@@ -54,7 +51,7 @@ class ConnectionTester(QThread):
                         headers={"Content-Type": "application/json"},
                         method="POST"
                     )
-                    with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
+                    with urllib.request.urlopen(req, timeout=8) as response:
                         res_data = json.loads(response.read().decode("utf-8"))
                         if "candidates" in res_data and len(res_data["candidates"]) > 0:
                             self.finished.emit(True, f"Successfully connected using model: {model} ({version})!")
@@ -89,7 +86,7 @@ class ConnectionTester(QThread):
                     },
                     method="POST"
                 )
-                with urllib.request.urlopen(req, timeout=8, context=ssl_context) as response:
+                with urllib.request.urlopen(req, timeout=8) as response:
                     res_data = json.loads(response.read().decode("utf-8"))
                     if "choices" in res_data and len(res_data["choices"]) > 0:
                         self.finished.emit(True, "Successfully connected to Mistral AI!")
@@ -124,6 +121,10 @@ class SettingsDialog(QDialog):
         # Load existing configuration
         addon_name = __package__ or __name__.split('.')[0]
         self.config = mw.addonManager.getConfig(addon_name) or {}
+        addon_id = mw.addonManager.addonFromModule(addon_name)
+        self.saved_config = mw.addonManager.addonMeta(addon_id).get("config", {})
+        if not isinstance(self.saved_config, dict):
+            self.saved_config = {}
         
         self.init_ui()
         
@@ -278,18 +279,49 @@ class SettingsDialog(QDialog):
         self.show_memory_section_cb = QCheckBox("Memory")
         self.show_memory_section_cb.setChecked(self.config.get("show_memory_section", True))
         
-        # 13. Card White Background QCheckBox
-        self.show_bg_cb = QCheckBox("Display cards with a clean white background container")
+        # 13. Grammar Trainer container toggle
+        self.show_bg_cb = QCheckBox("Show Grammar Trainer Container")
         self.show_bg_cb.setChecked(self.config.get("show_white_background", False))
         
-        # 14. Center Horizontally QCheckBox
-        self.center_horiz_cb = QCheckBox("Center text horizontally")
-        self.center_horiz_cb.setChecked(self.config.get("center_horizontal", True))
- 
-        # 15. Center Vertically QCheckBox
-        self.center_vert_cb = QCheckBox("Center text vertically (midcenter)")
-        self.center_vert_cb.setChecked(self.config.get("center_vertical", True))
- 
+        # Display settings. Missing new keys inherit the closest legacy choice.
+        self.vertical_position_combo = QComboBox()
+        for label, value in (("Top", "top"), ("Center", "center"), ("Bottom", "bottom")):
+            self.vertical_position_combo.addItem(label, value)
+        horizontal_value, vertical_value = resolve_display_positions(self.config, self.saved_config)
+        self.vertical_position_combo.setCurrentIndex(max(0, self.vertical_position_combo.findData(
+            vertical_value
+        )))
+
+        self.horizontal_alignment_combo = QComboBox()
+        for label, value in (("Center", "center"), ("Left", "left"), ("Right", "right")):
+            self.horizontal_alignment_combo.addItem(label, value)
+        self.horizontal_alignment_combo.setCurrentIndex(max(0, self.horizontal_alignment_combo.findData(
+            horizontal_value
+        )))
+
+        self.audio_controls_position_combo = QComboBox()
+        for label, value in (("Top Right", "top_right"), ("Top Left", "top_left"),
+                             ("Bottom Right", "bottom_right"), ("Bottom Left", "bottom_left")):
+            self.audio_controls_position_combo.addItem(label, value)
+        controls_position = self.config.get("audio_controls_position", "top_right")
+        controls_index = self.audio_controls_position_combo.findData(controls_position)
+        self.audio_controls_position_combo.setCurrentIndex(controls_index if controls_index >= 0 else 0)
+
+        self.font_family_combo = QComboBox()
+        for label, value in (("System", "system"), ("Serif", "serif"), ("Monospace", "monospace")):
+            self.font_family_combo.addItem(label, value)
+        font_family = self.config.get("font_family", "system")
+        font_index = self.font_family_combo.findData(font_family)
+        self.font_family_combo.setCurrentIndex(font_index if font_index >= 0 else 0)
+
+        self.image_size_combo = QComboBox()
+        for label, value in (("Small — 160 px", 160), ("Medium — 240 px", 240),
+                             ("Large — 320 px", 320), ("Extra Large — 480 px", 480)):
+            self.image_size_combo.addItem(label, value)
+        image_size = self.config.get("image_max_height", 240)
+        image_index = self.image_size_combo.findData(image_size)
+        self.image_size_combo.setCurrentIndex(image_index if image_index >= 0 else 1)
+
         # 16. Card Font Size QSpinBox
         self.font_size_spin = QSpinBox()
         self.font_size_spin.setRange(12, 48)
@@ -303,8 +335,10 @@ class SettingsDialog(QDialog):
  
         # 18. Explanation Alignment QComboBox
         self.explanation_align_combo = QComboBox()
-        self.explanation_align_combo.addItems(["left", "center"])
-        self.explanation_align_combo.setCurrentText(self.config.get("explanation_align", "left"))
+        self.explanation_align_combo.addItem("Left", "left")
+        self.explanation_align_combo.addItem("Center", "center")
+        explanation_index = self.explanation_align_combo.findData(self.config.get("explanation_align", "left"))
+        self.explanation_align_combo.setCurrentIndex(explanation_index if explanation_index >= 0 else 0)
  
         # 19. Blank Reveal Delay QSpinBox
         self.blank_timer_spin = QSpinBox()
@@ -378,7 +412,6 @@ class SettingsDialog(QDialog):
         general_form.addRow(self.mistral_label, self.mistral_key_widget)
         general_form.addRow(QLabel("Number of Distractors:"), self.dist_spin)
         general_form.addRow(QLabel("Auto-Flip Card:"), self.auto_flip_cb)
-        general_form.addRow(QLabel("Card White BG:"), self.show_bg_cb)
         general_form.addRow(QLabel("Blank Reveal Delay:"), self.blank_timer_spin)
         general_form.addRow(QLabel("Auto-Open Dropdown:"), self.auto_open_dropdown_cb)
         general_form.addRow(QLabel("Keyboard Shortcuts:"), self.keyboard_shortcuts_cb)
@@ -390,16 +423,20 @@ class SettingsDialog(QDialog):
         general_layout.addWidget(self.info_note)
         general_layout.addStretch()
         
-        # Tab 2: Layout
+        # Tab 2: Display
         tab_layout = QWidget()
         layout_tab_layout = QVBoxLayout(tab_layout)
         layout_tab_layout.setContentsMargins(15, 15, 15, 15)
         layout_form = QFormLayout()
-        layout_form.addRow(QLabel("Align Horizontal:"), self.center_horiz_cb)
-        layout_form.addRow(QLabel("Align Vertical:"), self.center_vert_cb)
-        layout_form.addRow(QLabel("Card Font Size (px):"), self.font_size_spin)
-        layout_form.addRow(QLabel("Card Max Width (px):"), self.card_max_width_spin)
-        layout_form.addRow(QLabel("Explanation Align:"), self.explanation_align_combo)
+        layout_form.addRow(QLabel("Vertical Position:"), self.vertical_position_combo)
+        layout_form.addRow(QLabel("Horizontal Alignment:"), self.horizontal_alignment_combo)
+        layout_form.addRow(QLabel("Controls Position:"), self.audio_controls_position_combo)
+        layout_form.addRow(QLabel("Line Width (px):"), self.card_max_width_spin)
+        layout_form.addRow(QLabel("Font Family:"), self.font_family_combo)
+        layout_form.addRow(QLabel("Font Size (px):"), self.font_size_spin)
+        layout_form.addRow(QLabel("Image Size:"), self.image_size_combo)
+        layout_form.addRow(QLabel("Explanation Alignment:"), self.explanation_align_combo)
+        layout_form.addRow(self.show_bg_cb)
         layout_tab_layout.addLayout(layout_form)
         layout_tab_layout.addStretch()
         
@@ -480,7 +517,7 @@ class SettingsDialog(QDialog):
         help_layout.addStretch()
         
         self.tabs.addTab(tab_general, "General")
-        self.tabs.addTab(tab_layout, "Layout")
+        self.tabs.addTab(tab_layout, "Display")
         self.tabs.addTab(tab_badges, "Badges")
         self.tabs.addTab(tab_back, "Back Card")
         self.tabs.addTab(tab_translation, "Translation")
@@ -619,11 +656,18 @@ class SettingsDialog(QDialog):
         self.config["show_usage_section"] = self.show_usage_section_cb.isChecked()
         self.config["show_memory_section"] = self.show_memory_section_cb.isChecked()
         self.config["show_white_background"] = self.show_bg_cb.isChecked()
-        self.config["center_horizontal"] = self.center_horiz_cb.isChecked()
-        self.config["center_vertical"] = self.center_vert_cb.isChecked()
+        horizontal_alignment = self.horizontal_alignment_combo.currentData()
+        vertical_position = self.vertical_position_combo.currentData()
+        self.config["horizontal_alignment"] = horizontal_alignment
+        self.config["vertical_position"] = vertical_position
+        self.config["audio_controls_position"] = self.audio_controls_position_combo.currentData()
+        self.config["font_family"] = self.font_family_combo.currentData()
+        self.config["image_max_height"] = self.image_size_combo.currentData()
+        self.config["center_horizontal"] = horizontal_alignment == "center"
+        self.config["center_vertical"] = vertical_position == "center"
         self.config["font_size"] = self.font_size_spin.value()
         self.config["card_max_width"] = self.card_max_width_spin.value()
-        self.config["explanation_align"] = self.explanation_align_combo.currentText()
+        self.config["explanation_align"] = self.explanation_align_combo.currentData()
         self.config["blank_timer"] = self.blank_timer_spin.value()
         self.config["auto_open_dropdown"] = self.auto_open_dropdown_cb.isChecked()
         self.config["keyboard_shortcuts"] = self.keyboard_shortcuts_cb.isChecked()
@@ -636,13 +680,44 @@ class SettingsDialog(QDialog):
         addon_name = __package__ or __name__.split('.')[0]
         mw.addonManager.writeConfig(addon_name, self.config)
         
-        # Instantly update Anki note type template/styling to reflect show/hide selections
+        # Instantly update Anki note type template/styling to reflect show/hide selections.
+        # Keep rebuild and refresh failures separate so a failed rebuild cannot
+        # make a newly selected display position appear to have been applied.
         try:
             from .note_type import setup_note_type
             setup_note_type()
+        except Exception:
+            logger.exception(
+                "Grammar Trainer settings save: note-type rebuild failed "
+                "(vertical_position=%r, horizontal_alignment=%r)",
+                vertical_position,
+                horizontal_alignment,
+            )
+            QMessageBox.critical(
+                self,
+                "Grammar Trainer display update failed",
+                "Your settings were saved, but Grammar Trainer could not update its note type.\n\n"
+                "Review cards may still use the previous display layout. See Anki's debug log for details.",
+            )
+            return
+
+        try:
             mw.reset()
         except Exception:
-            pass
+            logger.exception(
+                "Grammar Trainer settings save: reviewer refresh failed after note-type rebuild "
+                "(vertical_position=%r, horizontal_alignment=%r)",
+                vertical_position,
+                horizontal_alignment,
+            )
+            QMessageBox.critical(
+                self,
+                "Grammar Trainer reviewer refresh failed",
+                "Grammar Trainer updated its note type, but Anki could not refresh the reviewer.\n\n"
+                "Close and reopen the reviewer before checking the new display layout. "
+                "See Anki's debug log for details.",
+            )
+            return
             
         self.accept()
 
@@ -679,11 +754,14 @@ class SettingsDialog(QDialog):
             self.show_usage_section_cb.setChecked(True)
             self.show_memory_section_cb.setChecked(True)
             self.show_bg_cb.setChecked(False)
-            self.center_horiz_cb.setChecked(True)
-            self.center_vert_cb.setChecked(True)
+            self.horizontal_alignment_combo.setCurrentIndex(self.horizontal_alignment_combo.findData("center"))
+            self.vertical_position_combo.setCurrentIndex(self.vertical_position_combo.findData("center"))
+            self.audio_controls_position_combo.setCurrentIndex(self.audio_controls_position_combo.findData("top_right"))
+            self.font_family_combo.setCurrentIndex(self.font_family_combo.findData("system"))
+            self.image_size_combo.setCurrentIndex(self.image_size_combo.findData(240))
             self.font_size_spin.setValue(20)
             self.card_max_width_spin.setValue(800)
-            self.explanation_align_combo.setCurrentText("left")
+            self.explanation_align_combo.setCurrentIndex(self.explanation_align_combo.findData("left"))
             self.blank_timer_spin.setValue(0)
             self.auto_open_dropdown_cb.setChecked(False)
             self.keyboard_shortcuts_cb.setChecked(False)
@@ -837,15 +915,16 @@ class GuideDialog(QDialog):
         
         # Section: HOW TO ADD CARDS
         add_cards_content = QLabel(
-            "• <b>Option 1: Using the AI Cloze Generator (Recommended)</b><br/>"
-            "1. Click the brain icon (🧠) in Anki's editor toolbar or press <b>Ctrl+Shift+G</b> to open the generator.<br/>"
+            "• <b>Option 1: Manual Entry tab (Recommended — no AI / no API Key Needed)</b><br/>"
+            "1. Click the brain icon (🧠) in Anki's editor toolbar or press <b>Ctrl+Shift+G</b> to open the generator. <b>Manual Entry</b> is the first tab.<br/>"
+            "2. Type your sentence, marking each blank with <b>___</b> (three or more underscores) — use it twice for a double-blank card.<br/>"
+            "3. Enter the correct answer and a comma-separated list of wrong options for each blank. A table then lists every option; optionally write why each one is right or wrong.<br/>"
+            "4. Optional: click <b>Generate Missing Explanations</b> to let the AI fill only the empty cells (needs an API key). It never changes text you wrote, and you can edit the results before saving.<br/>"
+            "5. Click <b>Create Card</b> (or <b>Insert into Card</b>). This works entirely offline, no API key required.<br/><br/>"
+            "• <b>Option 2: Using the AI tabs (optional)</b><br/>"
+            "1. Open the generator and choose <b>AI: Generate Card</b> (or <b>AI: Suggest Options</b> to pick the options first).<br/>"
             "2. Fill in the Language, Difficulty, and specify your grammar topic (e.g. 'Spanish Subjunctive').<br/>"
             "3. Click <b>Generate and Create Card</b>. The card is parsed and saved automatically.<br/><br/>"
-            "• <b>Option 2: Manual Entry tab (No AI / No API Key Needed)</b><br/>"
-            "1. Open the generator and switch to the <b>Manual Entry</b> tab.<br/>"
-            "2. Type your sentence, marking each blank with <b>___</b> (three or more underscores) — use it twice for a double-blank card.<br/>"
-            "3. Enter the correct answer and a comma-separated list of wrong options for each blank. A short note on why each is right/wrong is optional.<br/>"
-            "4. Click <b>Create Card</b>. This works entirely offline, no API key required.<br/><br/>"
             "• <b>Option 3: Editing Note Fields Directly (Advanced)</b><br/>"
             "1. In Anki, click <b>Add</b> in the main window toolbar and set the Note Type to <b>Grammar Trainer</b>.<br/>"
             "2. In the <b>Sentence</b> field, write your sentence and use <b>{{blank}}</b> where the dropdown cloze should appear. For a double-cloze card, use <b>{{blank1}}</b> and <b>{{blank2}}</b>.<br/>"
@@ -871,11 +950,22 @@ class GuideDialog(QDialog):
         
         self.sec2 = CollapsibleSection("CLOZE KEYBOARD SHORTCUTS", shortcuts_content)
         scroll_layout.addWidget(self.sec2)
+
+        # Display settings
+        display_content = QLabel(
+            "• <b>Display tab:</b> Choose Top, Center, or Bottom for card content, and Center, Left, or Right for horizontal alignment.<br/><br/>"
+            "• <b>Size &amp; typography:</b> Set line width, font family and size, and the main Image field height (160–480 px). Extra-field images keep their existing sizing.<br/><br/>"
+            "• <b>Controls Position:</b> Place audio and translation controls in any corner. Long cards remain scrollable when Bottom is selected."
+        )
+        display_content.setWordWrap(True)
+        display_content.setStyleSheet(section_style)
+        self.sec_display = CollapsibleSection("DISPLAY SETTINGS", display_content)
+        scroll_layout.addWidget(self.sec_display)
         
         # Section 3: AUDIO & TTS PLAYBACK
         audio_content = QLabel(
             "• <b>Google Translate TTS:</b> If enabled, high-quality native Text-to-Speech audio will automatically play upon showing the front/back card.<br/><br/>"
-            "• <b>On-demand Playback:</b> You can click the audio speaker icon in the top-right corner of the card to replay the native audio at any time.<br/><br/>"
+            "• <b>On-demand Playback:</b> Replay audio from the controls, whose corner can be selected in Display settings. The translation toolbar icon appears with those controls when enabled.<br/><br/>"
             "• <b>Anki Native Audio:</b> Fully compatible with Anki's native TTS tags and audio field attachments."
         )
         audio_content.setWordWrap(True)
@@ -887,7 +977,7 @@ class GuideDialog(QDialog):
         # Section 4: CARD THEMING & BADGES
         theming_content = QLabel(
             "• <b>Badges Toggle:</b> You can individually show/hide the Language, Difficulty, and Grammar Category badges to declutter your review screen.<br/><br/>"
-            "• <b>White BG Container:</b> Displays a gorgeous, responsive card container with a subtle shadow. Toggle it off to use a transparent container.<br/><br/>"
+            "• <b>Show Grammar Trainer Container:</b> Displays the existing card container with its background, border, shadow, and padding. Toggle it off to use a transparent container.<br/><br/>"
             "• <b>Dark Mode Support:</b> Fully optimized for Anki's Night Mode with automatic color inversion and high-contrast styling."
         )
         theming_content.setWordWrap(True)

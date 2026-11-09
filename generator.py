@@ -5,6 +5,10 @@ import base64
 from aqt import mw
 from aqt.qt import *
 from aqt.utils import showInfo, showWarning
+from .explanation_utils import (
+    PROTECTED_FIELDS, apply_generated, build_explanation_json, build_explanation_prompt,
+    dedupe_options, find_missing, is_blank_text, parse_explanation_reply, plan_protected_fields,
+)
 
 # ---------------------------------------------------------------------------
 # Editable AI prompt (Settings -> AI Prompt tab)
@@ -105,13 +109,6 @@ class GeminiWorker(QThread):
     def run(self):
         import urllib.error
         import time
-        import ssl
-        
-        try:
-            ssl_context = ssl._create_unverified_context()
-        except Exception:
-            ssl_context = None
-        
         # Response validation schema
         schema = {
             "type": "object",
@@ -193,7 +190,7 @@ class GeminiWorker(QThread):
                             method="POST"
                         )
                         
-                        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
+                        with urllib.request.urlopen(req, timeout=15) as response:
                             res_data = json.loads(response.read().decode("utf-8"))
                             text_content = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
                             
@@ -285,7 +282,7 @@ class GeminiWorker(QThread):
                             method="POST"
                         )
                         
-                        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
+                        with urllib.request.urlopen(req, timeout=15) as response:
                             res_data = json.loads(response.read().decode("utf-8"))
                             text_content = res_data["choices"][0]["message"]["content"].strip()
                             
@@ -347,13 +344,6 @@ class OptionsWorker(QThread):
     def run(self):
         import urllib.error
         import time
-        import ssl
-        
-        try:
-            ssl_context = ssl._create_unverified_context()
-        except Exception:
-            ssl_context = None
-            
         schema = {
             "type": "object",
             "properties": {
@@ -399,7 +389,7 @@ class OptionsWorker(QThread):
                             method="POST"
                         )
                         
-                        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
+                        with urllib.request.urlopen(req, timeout=15) as response:
                             res_data = json.loads(response.read().decode("utf-8"))
                             text_content = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
                             
@@ -493,7 +483,7 @@ class OptionsWorker(QThread):
                             method="POST"
                         )
                         
-                        with urllib.request.urlopen(req, timeout=15, context=ssl_context) as response:
+                        with urllib.request.urlopen(req, timeout=15) as response:
                             res_data = json.loads(response.read().decode("utf-8"))
                             text_content = res_data["choices"][0]["message"]["content"].strip()
                             
@@ -550,6 +540,143 @@ class OptionsWorker(QThread):
             combined_errors = "\n".join([f"- {err}" for err in attempted_errors])
             self.error.emit(combined_errors)
 
+class ExplanationWorker(QThread):
+    """Explanations-only AI request for the optional "Generate Missing Explanations" action.
+
+    Mirrors the provider/model fallback order of GeminiWorker (which is left
+    untouched) but uses its own small response schema: a flat list of
+    {blank, option, explanation} items keyed by the option TEXT, so the result
+    never depends on the order of the options.
+    """
+    finished = pyqtSignal(dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, prompt, api_key, api_provider="gemini"):
+        super().__init__()
+        self.prompt = prompt
+        self.api_key = api_key.strip() if api_key else ""
+        self.api_provider = api_provider
+
+    def run(self):
+        import urllib.error
+        import time
+        schema = {
+            "type": "object",
+            "properties": {
+                "explanations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "blank": {"type": "string"},
+                            "option": {"type": "string"},
+                            "explanation": {"type": "string"}
+                        },
+                        "required": ["blank", "option", "explanation"]
+                    }
+                }
+            },
+            "required": ["explanations"]
+        }
+
+        attempts = []
+        if self.api_provider == "gemini":
+            for model, version in [
+                ("gemini-2.5-flash", "v1beta"), ("gemini-2.0-flash", "v1beta"),
+                ("gemini-1.5-flash", "v1"), ("gemini-1.5-flash", "v1beta"),
+                ("gemini-1.5-pro", "v1"), ("gemini-1.5-pro", "v1beta"),
+            ]:
+                attempts.append((
+                    f"{model} ({version})",
+                    f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={self.api_key}",
+                    {"Content-Type": "application/json"},
+                    {
+                        "contents": [{"parts": [{"text": self.prompt}]}],
+                        "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema}
+                    },
+                    "gemini",
+                ))
+        else:
+            for model in ["mistral-large-latest", "mistral-small-latest", "open-mixtral-8x7b", "codestral-latest"]:
+                attempts.append((
+                    model,
+                    "https://api.mistral.ai/v1/chat/completions",
+                    {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
+                    {
+                        "model": model,
+                        "messages": [{"role": "user", "content": self.prompt}],
+                        "response_format": {"type": "json_object"}
+                    },
+                    "mistral",
+                ))
+
+        attempted_errors = []
+        for label, url, headers, payload, kind in attempts:
+            err_msg = ""
+            for attempt in range(3):
+                try:
+                    req = urllib.request.Request(
+                        url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=15) as response:
+                        res_data = json.loads(response.read().decode("utf-8"))
+                        if kind == "gemini":
+                            text_content = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                        else:
+                            text_content = res_data["choices"][0]["message"]["content"].strip()
+                        if text_content.startswith("```"):
+                            lines = text_content.splitlines()
+                            if lines[0].startswith("```"):
+                                lines = lines[1:]
+                            if lines and lines[-1].strip() == "```":
+                                lines = lines[:-1]
+                            text_content = "\n".join(lines).strip()
+                        parsed = json.loads(text_content)
+                        if not isinstance(parsed, dict):
+                            raise ValueError("The reply was not a JSON object.")
+                        self.finished.emit(parsed)
+                        return
+                except urllib.error.HTTPError as e:
+                    try:
+                        error_body = e.read().decode("utf-8")
+                        error_json = json.loads(error_body)
+                        if kind == "gemini":
+                            error_detail = error_json.get("error", {}).get("message", error_body)
+                        else:
+                            error_detail = error_json.get("message", error_body)
+                    except Exception:
+                        error_detail = str(e)
+                    err_msg = f"{label}: {error_detail}"
+                    if kind == "gemini" and e.code == 400:
+                        gen_cfg = payload["generationConfig"]
+                        removed = False
+                        if "responseSchema" in gen_cfg:
+                            gen_cfg.pop("responseSchema")
+                            removed = True
+                        elif "responseMimeType" in gen_cfg:
+                            gen_cfg.pop("responseMimeType")
+                            removed = True
+                        if removed:
+                            time.sleep(0.5)
+                            continue
+                    if e.code in [429, 500, 503, 504]:
+                        time.sleep(1.5 * (attempt + 1))
+                        continue
+                    if err_msg not in attempted_errors:
+                        attempted_errors.append(err_msg)
+                    break
+                except Exception as e:
+                    err_msg = f"{label}: {str(e)}"
+                    if err_msg not in attempted_errors:
+                        attempted_errors.append(err_msg)
+                    time.sleep(1)
+                    continue
+            else:
+                if err_msg and err_msg not in attempted_errors:
+                    attempted_errors.append(err_msg)
+
+        self.error.emit("\n".join([f"- {err}" for err in attempted_errors]) or "No response from the AI provider.")
+
 class GeneratorDialog(QDialog):
     def __init__(self, parent=None, editor=None):
         super().__init__(parent)
@@ -582,6 +709,7 @@ class GeneratorDialog(QDialog):
             self.editor.parentWindow.activateWindow()
 
     def reject(self):
+        self._stop_explanation_worker()
         super().reject()
         if self.editor and getattr(self.editor, "parentWindow", None):
             self.editor.parentWindow.raise_()
@@ -646,7 +774,100 @@ class GeneratorDialog(QDialog):
         # Tab Widget
         self.tabs = QTabWidget()
         
-        # TAB 1: INSTANT GENERATOR
+        # TAB 1: MANUAL ENTRY (default tab - no AI / no API key needed)
+        self.tab_manual = QWidget()
+        tab_manual_outer_layout = QVBoxLayout()
+        tab_manual_outer_layout.setContentsMargins(0, 0, 0, 0)
+        
+        manual_scroll = QScrollArea()
+        manual_scroll.setWidgetResizable(True)
+        manual_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        manual_scroll_content = QWidget()
+        tab_manual_layout = QVBoxLayout()
+        
+        tab_manual_layout.addWidget(QLabel("Sentence — type ___ (three or more underscores) where each blank goes:"))
+        self.manual_sentence_input = QTextEdit()
+        self.manual_sentence_input.setPlaceholderText("e.g. Hun blev meget ___ over den uretfærdige behandling.")
+        self.manual_sentence_input.setFixedHeight(60)
+        tab_manual_layout.addWidget(self.manual_sentence_input)
+        
+        self.manual_multi_blank_chk = QCheckBox("This sentence has two blanks (use ___ twice)")
+        self.manual_multi_blank_chk.stateChanged.connect(self.on_manual_multi_blank_toggled)
+        tab_manual_layout.addWidget(self.manual_multi_blank_chk)
+        
+        self.manual_blank1_group = QGroupBox("Blank 1")
+        blank1_form = QFormLayout()
+        self.manual_answer1_input = QLineEdit()
+        self.manual_answer1_input.setPlaceholderText("e.g. forarget")
+        blank1_form.addRow("Correct answer:", self.manual_answer1_input)
+        self.manual_distractors1_input = QLineEdit()
+        self.manual_distractors1_input.setPlaceholderText("e.g. forarg, forarger, forargede")
+        blank1_form.addRow("Wrong options (comma separated):", self.manual_distractors1_input)
+        self.manual_hint1_input = QLineEdit()
+        self.manual_hint1_input.setPlaceholderText("Optional — shown inline on the front, next to the blank")
+        blank1_form.addRow("Hint (optional):", self.manual_hint1_input)
+        self.manual_expl_table1 = self._make_manual_table()
+        blank1_form.addRow("Explanations (optional):", self.manual_expl_table1)
+        self.manual_dup_note1 = QLabel("")
+        self.manual_dup_note1.setWordWrap(True)
+        blank1_form.addRow("", self.manual_dup_note1)
+        self.manual_blank1_group.setLayout(blank1_form)
+        tab_manual_layout.addWidget(self.manual_blank1_group)
+        
+        self.manual_blank2_group = QGroupBox("Blank 2")
+        blank2_form = QFormLayout()
+        self.manual_answer2_input = QLineEdit()
+        self.manual_answer2_input.setPlaceholderText("e.g. lærte")
+        blank2_form.addRow("Correct answer:", self.manual_answer2_input)
+        self.manual_distractors2_input = QLineEdit()
+        self.manual_distractors2_input.setPlaceholderText("e.g. lærer, lære, lærende")
+        blank2_form.addRow("Wrong options (comma separated):", self.manual_distractors2_input)
+        self.manual_hint2_input = QLineEdit()
+        self.manual_hint2_input.setPlaceholderText("Optional — shown inline on the front, next to the blank")
+        blank2_form.addRow("Hint (optional):", self.manual_hint2_input)
+        self.manual_expl_table2 = self._make_manual_table()
+        blank2_form.addRow("Explanations (optional):", self.manual_expl_table2)
+        self.manual_dup_note2 = QLabel("")
+        self.manual_dup_note2.setWordWrap(True)
+        blank2_form.addRow("", self.manual_dup_note2)
+        self.manual_blank2_group.setLayout(blank2_form)
+        self.manual_blank2_group.setVisible(False)
+        tab_manual_layout.addWidget(self.manual_blank2_group)
+        
+        # Per-blank state for the explanation tables. The store keeps what the
+        # user typed, keyed by the lower-cased option text, so explanations
+        # survive when the distractor list changes.
+        self._manual_inputs = [
+            (self.manual_answer1_input, self.manual_distractors1_input),
+            (self.manual_answer2_input, self.manual_distractors2_input),
+        ]
+        self._manual_tables = [self.manual_expl_table1, self.manual_expl_table2]
+        self._manual_dup_labels = [self.manual_dup_note1, self.manual_dup_note2]
+        self._manual_table_options = [[], []]
+        self._manual_expl_store = [{}, {}]
+        for _idx, (_ans, _dist) in enumerate(self._manual_inputs):
+            _ans.editingFinished.connect(lambda idx=_idx: self.rebuild_manual_table(idx))
+            _dist.editingFinished.connect(lambda idx=_idx: self.rebuild_manual_table(idx))
+            self.rebuild_manual_table(_idx)
+        
+        self.expl_btn = QPushButton("Generate Missing Explanations")
+        self.expl_btn.setToolTip("Optional. Uses the configured AI to fill ONLY the empty explanation cells. "
+                                 "Existing text is never changed.")
+        self.expl_btn.clicked.connect(self.start_missing_explanations)
+        if not self.api_key:
+            self.expl_btn.setEnabled(False)
+            self.expl_btn.setToolTip("Optional. Add an API key in Settings to enable this. "
+                                     "Manual card creation works without one.")
+        tab_manual_layout.addWidget(self.expl_btn)
+        
+        tab_manual_layout.addStretch()
+        manual_scroll_content.setLayout(tab_manual_layout)
+        manual_scroll.setWidget(manual_scroll_content)
+        tab_manual_outer_layout.addWidget(manual_scroll)
+        self.tab_manual.setLayout(tab_manual_outer_layout)
+        self.tabs.addTab(self.tab_manual, "Manual Entry")
+        
+        # AI TAB: GENERATE CARD (formerly 'Instant Generator')
         self.tab_instant = QWidget()
         tab_instant_layout = QVBoxLayout()
         
@@ -660,9 +881,9 @@ class GeneratorDialog(QDialog):
         tab_instant_layout.addWidget(self.multi_blank_chk)
         
         self.tab_instant.setLayout(tab_instant_layout)
-        self.tabs.addTab(self.tab_instant, "Instant Generator")
+        self.tabs.addTab(self.tab_instant, "AI: Generate Card")
         
-        # TAB 2: SUGGEST & REFINE (TWO-STEP)
+        # AI TAB: SUGGEST OPTIONS (formerly 'Suggest & Refine', two-step)
         self.tab_twostep = QWidget()
         tab_twostep_layout = QVBoxLayout()
         
@@ -714,76 +935,8 @@ class GeneratorDialog(QDialog):
         tab_twostep_layout.addWidget(self.step3_sentence_input)
         
         self.tab_twostep.setLayout(tab_twostep_layout)
-        self.tabs.addTab(self.tab_twostep, "Suggest & Refine Options")
+        self.tabs.addTab(self.tab_twostep, "AI: Suggest Options")
         
-        # TAB 3: MANUAL ENTRY (no AI / no API key needed)
-        self.tab_manual = QWidget()
-        tab_manual_outer_layout = QVBoxLayout()
-        tab_manual_outer_layout.setContentsMargins(0, 0, 0, 0)
-        
-        manual_scroll = QScrollArea()
-        manual_scroll.setWidgetResizable(True)
-        manual_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        manual_scroll_content = QWidget()
-        tab_manual_layout = QVBoxLayout()
-        
-        tab_manual_layout.addWidget(QLabel("Sentence — type ___ (three or more underscores) where each blank goes:"))
-        self.manual_sentence_input = QTextEdit()
-        self.manual_sentence_input.setPlaceholderText("e.g. Hun blev meget ___ over den uretfærdige behandling.")
-        self.manual_sentence_input.setFixedHeight(60)
-        tab_manual_layout.addWidget(self.manual_sentence_input)
-        
-        self.manual_multi_blank_chk = QCheckBox("This sentence has two blanks (use ___ twice)")
-        self.manual_multi_blank_chk.stateChanged.connect(self.on_manual_multi_blank_toggled)
-        tab_manual_layout.addWidget(self.manual_multi_blank_chk)
-        
-        self.manual_blank1_group = QGroupBox("Blank 1")
-        blank1_form = QFormLayout()
-        self.manual_answer1_input = QLineEdit()
-        self.manual_answer1_input.setPlaceholderText("e.g. forarget")
-        blank1_form.addRow("Correct answer:", self.manual_answer1_input)
-        self.manual_distractors1_input = QLineEdit()
-        self.manual_distractors1_input.setPlaceholderText("e.g. forarg, forarger, forargede")
-        blank1_form.addRow("Wrong options (comma separated):", self.manual_distractors1_input)
-        self.manual_hint1_input = QLineEdit()
-        self.manual_hint1_input.setPlaceholderText("Optional — shown inline on the front, next to the blank")
-        blank1_form.addRow("Hint (optional):", self.manual_hint1_input)
-        self.manual_correct_expl1_input = QLineEdit()
-        self.manual_correct_expl1_input.setPlaceholderText("Optional — shown when the correct answer is picked")
-        blank1_form.addRow("Why it's correct (optional):", self.manual_correct_expl1_input)
-        self.manual_incorrect_expl1_input = QLineEdit()
-        self.manual_incorrect_expl1_input.setPlaceholderText("Optional — shown when any wrong option is picked")
-        blank1_form.addRow("Why others are wrong (optional):", self.manual_incorrect_expl1_input)
-        self.manual_blank1_group.setLayout(blank1_form)
-        tab_manual_layout.addWidget(self.manual_blank1_group)
-        
-        self.manual_blank2_group = QGroupBox("Blank 2")
-        blank2_form = QFormLayout()
-        self.manual_answer2_input = QLineEdit()
-        self.manual_answer2_input.setPlaceholderText("e.g. lærte")
-        blank2_form.addRow("Correct answer:", self.manual_answer2_input)
-        self.manual_distractors2_input = QLineEdit()
-        self.manual_distractors2_input.setPlaceholderText("e.g. lærer, lære, lærende")
-        blank2_form.addRow("Wrong options (comma separated):", self.manual_distractors2_input)
-        self.manual_hint2_input = QLineEdit()
-        self.manual_hint2_input.setPlaceholderText("Optional — shown inline on the front, next to the blank")
-        blank2_form.addRow("Hint (optional):", self.manual_hint2_input)
-        self.manual_correct_expl2_input = QLineEdit()
-        self.manual_correct_expl2_input.setPlaceholderText("Optional — shown when the correct answer is picked")
-        blank2_form.addRow("Why it's correct (optional):", self.manual_correct_expl2_input)
-        self.manual_incorrect_expl2_input = QLineEdit()
-        self.manual_incorrect_expl2_input.setPlaceholderText("Optional — shown when any wrong option is picked")
-        blank2_form.addRow("Why others are wrong (optional):", self.manual_incorrect_expl2_input)
-        self.manual_blank2_group.setLayout(blank2_form)
-        self.manual_blank2_group.setVisible(False)
-        tab_manual_layout.addWidget(self.manual_blank2_group)
-        
-        tab_manual_layout.addStretch()
-        manual_scroll_content.setLayout(tab_manual_layout)
-        manual_scroll.setWidget(manual_scroll_content)
-        tab_manual_outer_layout.addWidget(manual_scroll)
-        self.tab_manual.setLayout(tab_manual_outer_layout)
-        self.tabs.addTab(self.tab_manual, "Manual Entry")
         
         self.tabs.currentChanged.connect(self.on_tab_changed)
         
@@ -828,6 +981,8 @@ class GeneratorDialog(QDialog):
         layout.addLayout(btn_layout)
         
         self.setLayout(layout)
+        # Manual Entry is the default tab, so set the action button for it
+        self.on_tab_changed(self.tabs.currentIndex())
         
     def remember_last_selection(self, *_args):
         # Persist the current Language/Difficulty/Grammar Topic so the
@@ -852,15 +1007,18 @@ class GeneratorDialog(QDialog):
             self.options_worker.terminate()
             self.options_worker.wait()
             self.options_worker = None
+        # Stop explanation worker if running
+        self._stop_explanation_worker()
             
         self.progress_bar.setVisible(False)
-        self.gen_btn.setEnabled(True if self.api_key else False)
+        self.gen_btn.setEnabled(True if (self.api_key or self.tabs.currentWidget() is self.tab_manual) else False)
+        self.expl_btn.setEnabled(True if self.api_key else False)
         self.suggest_btn.setEnabled(True if self.api_key else False)
         self.stop_btn.setEnabled(False)
         self.loading_lbl.setText("Generation stopped by user.")
         
     def on_tab_changed(self, index):
-        if index == 2:
+        if self.tabs.widget(index) is self.tab_manual:
             # Manual Entry tab: no AI call involved, so no API key is needed
             self.gen_btn.setText(self._manual_btn_text)
             self.gen_btn.setEnabled(True)
@@ -868,6 +1026,184 @@ class GeneratorDialog(QDialog):
             self.gen_btn.setText(self._ai_btn_text)
             self.gen_btn.setEnabled(True if self.api_key else False)
             
+    # ------------------------------------------------------------------
+    # Manual Entry: per-option explanation tables
+    # ------------------------------------------------------------------
+    def _make_manual_table(self):
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels(["Option", "Explanation (optional)"])
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setWordWrap(False)
+        table.setVisible(False)
+        return table
+
+    def _commit_pending_edits(self):
+        # Make sure a cell that is still being edited is committed before reading it
+        w = QApplication.focusWidget()
+        if w is not None:
+            w.clearFocus()
+
+    def _sync_manual_store(self, idx):
+        """Copy the visible explanation cells into the per-blank store."""
+        table = self._manual_tables[idx]
+        for row, opt in enumerate(self._manual_table_options[idx]):
+            item = table.item(row, 1)
+            self._manual_expl_store[idx][opt.lower()] = item.text() if item is not None else ""
+
+    def _manual_explanations(self, idx):
+        """Explanation text per option (lower-cased option -> text) for one blank."""
+        self._sync_manual_store(idx)
+        return dict(self._manual_expl_store[idx])
+
+    def rebuild_manual_table(self, idx):
+        """Rebuild one blank's table from its answer + comma-separated distractors.
+
+        Explanations are matched by option text (case-insensitive), so an
+        option that is still present keeps its text and a new or renamed
+        option starts empty. Nothing is ever attached to a different option.
+        """
+        self._sync_manual_store(idx)
+        answer_input, distractors_input = self._manual_inputs[idx]
+        table = self._manual_tables[idx]
+        label = self._manual_dup_labels[idx]
+        
+        if answer_input.text().strip():
+            options, ignored = dedupe_options(answer_input.text(), distractors_input.text())
+        else:
+            options, ignored = [], []
+        
+        table.blockSignals(True)
+        table.setRowCount(len(options))
+        for row, opt in enumerate(options):
+            opt_item = QTableWidgetItem(("✓ " if row == 0 else "") + opt)
+            opt_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            if row == 0:
+                opt_item.setToolTip("Correct answer")
+            table.setItem(row, 0, opt_item)
+            table.setItem(row, 1, QTableWidgetItem(self._manual_expl_store[idx].get(opt.lower(), "")))
+        table.blockSignals(False)
+        self._manual_table_options[idx] = list(options)
+        
+        table.setVisible(bool(options))
+        if options:
+            table.setFixedHeight(table.horizontalHeader().sizeHint().height()
+                                 + len(options) * table.verticalHeader().defaultSectionSize() + 6)
+        if ignored:
+            label.setText("Ignored duplicate option(s): " + ", ".join(ignored))
+        elif not options:
+            label.setText("Enter the correct answer and the wrong options to write an explanation for each.")
+        else:
+            label.setText("")
+
+    def _stop_explanation_worker(self):
+        worker = getattr(self, "expl_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.terminate()
+            worker.wait()
+            self.expl_worker = None
+
+    def start_missing_explanations(self):
+        import re
+        if not self.api_key:
+            showWarning("Add an API key in Settings to use this optional feature.\n\nManual card creation works without one.")
+            return
+        
+        sentence_raw = self.manual_sentence_input.toPlainText().strip()
+        multi_blank = self.manual_multi_blank_chk.isChecked()
+        if not sentence_raw:
+            showWarning("Please enter a sentence.")
+            return
+        expected = 2 if multi_blank else 1
+        blank_count = len(re.findall(r'_{3,}', sentence_raw))
+        if blank_count != expected:
+            showWarning(f"The sentence needs exactly {expected} ___ marker(s) to match the 'two blanks' setting (found {blank_count}).")
+            return
+        
+        self._commit_pending_edits()
+        blanks = []
+        for idx in range(expected):
+            self.rebuild_manual_table(idx)
+            if not self._manual_inputs[idx][0].text().strip():
+                showWarning(f"Please enter the correct answer for Blank {idx + 1} first.")
+                return
+            options = list(self._manual_table_options[idx])
+            expl = self._manual_explanations(idx)
+            missing = [o for o in options if is_blank_text(expl.get(o.lower(), ""))]
+            blanks.append({"correct": options[0], "options": options, "missing": missing, "explanations": expl})
+        
+        if not find_missing(blanks):
+            # Nothing to do: no API request is made.
+            self.loading_lbl.setText("No explanations are missing — every option already has one.")
+            return
+        
+        language = self.lang_combo.currentText()
+        prompt = build_explanation_prompt(language, sentence_raw, blanks)
+        self._expl_request = blanks
+        
+        self.expl_btn.setEnabled(False)
+        self.gen_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        provider_name = "Gemini" if self.api_provider == "gemini" else "Mistral"
+        self.loading_lbl.setText(f"Connecting to {provider_name} API... writing the missing explanations (nothing else is changed)...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0) # Pulse mode
+        
+        self.expl_worker = ExplanationWorker(prompt, self.api_key, self.api_provider)
+        self.expl_worker.finished.connect(self.on_explanations_ready)
+        self.expl_worker.error.connect(self.on_explanations_error)
+        self.expl_worker.start()
+
+    def _finish_explanation_request_ui(self):
+        self.progress_bar.setVisible(False)
+        self.expl_btn.setEnabled(True if self.api_key else False)
+        self.gen_btn.setEnabled(True if (self.api_key or self.tabs.currentWidget() is self.tab_manual) else False)
+        self.stop_btn.setEnabled(False)
+        self.loading_lbl.setText("")
+
+    def on_explanations_ready(self, parsed):
+        self._finish_explanation_request_ui()
+        blanks = getattr(self, "_expl_request", [])
+        try:
+            generated, unfilled = parse_explanation_reply(parsed, blanks)
+        except ValueError as e:
+            showWarning(f"Explanation generation failed: {e}\n\nNothing in your card was changed.")
+            return
+        
+        # Read what is in the cells NOW. The user may have typed while the request ran.
+        current = {}
+        for idx in range(len(blanks)):
+            self._sync_manual_store(idx)
+            for opt in self._manual_table_options[idx]:
+                current[(idx, opt.lower())] = self._manual_expl_store[idx].get(opt.lower(), "")
+        updates = apply_generated(current, generated)
+        
+        for (idx, key), text in updates.items():
+            table = self._manual_tables[idx]
+            for row, opt in enumerate(self._manual_table_options[idx]):
+                if opt.lower() == key:
+                    table.blockSignals(True)
+                    table.setItem(row, 1, QTableWidgetItem(text))
+                    table.blockSignals(False)
+                    self._manual_expl_store[idx][key] = text
+                    break
+        
+        skipped = len(generated) - len(updates)
+        msg = f"Filled {len(updates)} explanation(s). Review and edit them, then insert the card."
+        if skipped:
+            msg += f" ({skipped} skipped because you filled those cells in meanwhile.)"
+        if unfilled:
+            names = ", ".join(f"Blank {i + 1}: {o}" for i, o in unfilled)
+            showWarning(f"Only part of the explanations could be generated. Left empty:\n{names}\n\n"
+                        "Your existing text was not changed. You can try again or write them yourself.")
+        self.loading_lbl.setText(msg)
+
+    def on_explanations_error(self, error_msg):
+        self._finish_explanation_request_ui()
+        showWarning(f"Could not generate explanations:\n\n{error_msg}\n\nYour card content was not changed.")
+
     def on_manual_multi_blank_toggled(self, state):
         self.manual_blank2_group.setVisible(self.manual_multi_blank_chk.isChecked())
         
@@ -950,9 +1286,9 @@ class GeneratorDialog(QDialog):
             cb.blockSignals(False)
 
     def start_generation(self):
-        active_tab = self.tabs.currentIndex()
+        active_tab = self.tabs.currentWidget()
         
-        if active_tab == 2:
+        if active_tab is self.tab_manual:
             self.create_manual_card()
             return
         
@@ -961,7 +1297,7 @@ class GeneratorDialog(QDialog):
         grammar_type = self.type_combo.currentText()
         dist_count = self.dist_spin.value()
         
-        if active_tab == 0:
+        if active_tab is self.tab_instant:
             sentence = self.sentence_input.toPlainText().strip()
             multi_blank = self.multi_blank_chk.isChecked()
             
@@ -978,7 +1314,7 @@ class GeneratorDialog(QDialog):
             sentence = self.step3_sentence_input.toPlainText().strip()
             options_str = self.final_options_input.text().strip()
             if not options_str:
-                showWarning("Please suggest and select options in Tab 2 first before generating a card.")
+                showWarning("Please suggest and select options in the 'AI: Suggest Options' tab first before generating a card.")
                 return
                 
             task_details = f"You MUST use the following word options for the cloze drop-down list: {options_str.replace('|', ', ')}.\n"
@@ -1042,7 +1378,7 @@ class GeneratorDialog(QDialog):
                 showWarning(f"The sentence needs exactly one ___ marker (found {blank_count}). Check 'This sentence has two blanks' if you want a double blank.")
             return
         
-        def build_blank(answer_input, distractors_input, hint_input, correct_expl_input, incorrect_expl_input, label):
+        def build_blank(idx, answer_input, distractors_input, hint_input, label):
             answer = answer_input.text().strip()
             if not answer:
                 showWarning(f"Please enter the correct answer for {label}.")
@@ -1052,19 +1388,12 @@ class GeneratorDialog(QDialog):
                 showWarning(f"Please add at least one wrong option (distractor) for {label}, separated by commas.")
                 return None
             
-            seen = set()
-            all_options = []
-            for opt in [answer] + distractors:
-                key = opt.strip().lower()
-                if key and key not in seen:
-                    seen.add(key)
-                    all_options.append(opt.strip())
+            # Same de-duplication as before (case-insensitive, first spelling wins)
+            all_options, _ignored = dedupe_options(answer, distractors_input.text())
             
-            correct_expl = correct_expl_input.text().strip()
-            incorrect_expl = incorrect_expl_input.text().strip()
-            expl_data = {}
-            for opt in all_options:
-                expl_data[opt] = correct_expl if opt.lower() == answer.lower() else incorrect_expl
+            # One explanation per option, serialised into the existing
+            # {option: explanation} JSON object for this blank.
+            expl_json = build_explanation_json(all_options, self._manual_explanations(idx))
 
             hint = hint_input.text().strip()
             hint = hint.replace("{", "").replace("}", "").replace("::", ":")
@@ -1072,12 +1401,18 @@ class GeneratorDialog(QDialog):
             return {
                 "target": answer,
                 "options_str": "|".join(all_options),
-                "explanation": json.dumps(expl_data, ensure_ascii=False),
+                "explanation": expl_json,
                 "hint": hint,
             }
         
-        blank1 = build_blank(self.manual_answer1_input, self.manual_distractors1_input, self.manual_hint1_input,
-                              self.manual_correct_expl1_input, self.manual_incorrect_expl1_input, "Blank 1")
+        # Make sure the explanation tables reflect the final input text
+        self._commit_pending_edits()
+        self.rebuild_manual_table(0)
+        if multi_blank:
+            self.rebuild_manual_table(1)
+        
+        blank1 = build_blank(0, self.manual_answer1_input, self.manual_distractors1_input, self.manual_hint1_input,
+                              "Blank 1")
         if blank1 is None:
             return
         
@@ -1090,8 +1425,8 @@ class GeneratorDialog(QDialog):
             options_str = blank1["options_str"]
             explanation = blank1["explanation"]
         else:
-            blank2 = build_blank(self.manual_answer2_input, self.manual_distractors2_input, self.manual_hint2_input,
-                                  self.manual_correct_expl2_input, self.manual_incorrect_expl2_input, "Blank 2")
+            blank2 = build_blank(1, self.manual_answer2_input, self.manual_distractors2_input, self.manual_hint2_input,
+                                  "Blank 2")
             if blank2 is None:
                 return
             
@@ -1233,6 +1568,7 @@ class GeneratorDialog(QDialog):
             # Update current note fields directly in the active editor
             note = self.editor.note
             fields_set = []
+            old_sentence = note["Sentence"] if "Sentence" in note else ""
             for field, val in [
                 ("Sentence", sentence),
                 ("TargetWord", target_word),
@@ -1241,20 +1577,34 @@ class GeneratorDialog(QDialog):
                 ("GrammarType", grammar_type),
                 ("Difficulty", difficulty),
                 ("Language", language),
-                ("FrontAudio", ""),
-                ("BackAudio", ""),
-                ("Image", image_html),
-                ("Translation", translation)
             ]:
                 if field in note:
                     note[field] = val
                     fields_set.append(field)
             
+            # FrontAudio / BackAudio / Image / Translation are only replaced when a
+            # non-empty value is supplied. An empty value never clears existing content.
+            existing_protected = {f: note[f] for f in PROTECTED_FIELDS if f in note}
+            to_write, kept_fields, stale = plan_protected_fields(
+                existing_protected,
+                {"FrontAudio": "", "BackAudio": "", "Image": image_html, "Translation": translation},
+                old_sentence, sentence)
+            for field, val in to_write.items():
+                note[field] = val
+                fields_set.append(field)
+            
+            keep_msg = ""
+            if kept_fields:
+                keep_msg = f"\n\nExisting content kept: {', '.join(kept_fields)}"
+                if stale:
+                    keep_msg += ("\n\nNote: the sentence changed, so the kept content may belong to the "
+                                 "previous sentence. Please review it and remove it if it no longer fits.")
+            
             # Reload active editor representation to update GUI fields
             self.editor.loadNote()
             
             if fields_set:
-                showInfo(f"Grammar Trainer card populated successfully!\n\nFields updated: {', '.join(fields_set)}")
+                showInfo(f"Grammar Trainer card populated successfully!\n\nFields updated: {', '.join(fields_set)}{keep_msg}")
             else:
                 showInfo("Grammar Trainer card generated successfully!\n\nNote: The current note type does not have the expected fields (Sentence, TargetWord, etc.) so they could not be filled automatically.")
             

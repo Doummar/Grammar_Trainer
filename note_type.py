@@ -4,6 +4,31 @@ from aqt import mw
 NOTE_TYPE_NAME = "Grammar Trainer"
 FIELDS = ["Sentence", "TargetWord", "Options", "Explanation", "GrammarType", "Difficulty", "Language", "FrontAudio", "BackAudio", "Image", "Translation", "Extra"]
 
+
+def resolve_display_positions(config, saved_config, invalid_to_legacy=True):
+    legacy_center_horiz = config.get("center_horizontal", True)
+    legacy_center_vert = config.get("center_vertical", True)
+    legacy_horizontal = "center" if legacy_center_horiz else "left"
+    legacy_vertical = "center" if legacy_center_vert else "top"
+
+    horizontal_alignment = (
+        config.get("horizontal_alignment", legacy_horizontal)
+        if "horizontal_alignment" in saved_config
+        else legacy_horizontal
+    )
+    if horizontal_alignment not in ("center", "left", "right"):
+        horizontal_alignment = legacy_horizontal if invalid_to_legacy else "center"
+
+    vertical_position = (
+        config.get("vertical_position", legacy_vertical)
+        if "vertical_position" in saved_config
+        else legacy_vertical
+    )
+    if vertical_position not in ("top", "center", "bottom"):
+        vertical_position = legacy_vertical if invalid_to_legacy else "center"
+
+    return horizontal_alignment, vertical_position
+
 FRONT_TEMPLATE = """
 <div class="anki-card-outer-container">
   <div class="top-right-audio" id="front-audio-container">
@@ -11,36 +36,42 @@ FRONT_TEMPLATE = """
   </div>
 
   <div class="anki-grammar-card {{#Image}}has-image{{/Image}}">
-    <div class="card-meta">
-      <span class="badge badge-lang">{{Language}}</span>
-      <span class="badge badge-diff">{{Difficulty}}</span>
-      <span class="badge badge-type">{{GrammarType}}</span>
+    <div class="gt-zone-above">
+      <div class="card-meta">
+        <span class="badge badge-lang">{{Language}}</span>
+        <span class="badge badge-diff">{{Difficulty}}</span>
+        <span class="badge badge-type">{{GrammarType}}</span>
+      </div>
+
+      {{#Image}}
+      <div id="image-container" class="image-container unrevealed">
+        {{Image}}
+      </div>
+      {{/Image}}
     </div>
 
     <div class="sentence-container" id="sentence-container" dir="auto">
       {{Sentence}}
     </div>
 
-    <div id="image-container" class="image-container unrevealed">
-      {{Image}}
-    </div>
-
-    <div class="action-bar" id="action-bar">
-      <button class="check-btn" id="check-btn" onclick="checkAnkiAnswers()">Check Answer</button>
-    </div>
-
-    <div id="result-box" class="result-box hidden">
-      <div class="explanation-container">
-        <div class="explanation-body">
-          {{Explanation}}
-        </div>
-        <div class="info-toggle-row hidden" id="info-toggle-row"></div>
+    <div class="gt-zone-below">
+      <div class="action-bar" id="action-bar">
+        <button class="check-btn" id="check-btn" onclick="checkAnkiAnswers()">Check Answer</button>
       </div>
+
+      <div id="result-box" class="result-box hidden">
+        <div class="explanation-container">
+          <div class="explanation-body">
+            {{Explanation}}
+          </div>
+          <div class="info-toggle-row hidden" id="info-toggle-row"></div>
+        </div>
+      </div>
+
+      <div id="extra-container" class="extra-container hidden"></div>
+
+      <div id="translation-panel" class="info-panel hidden"></div>
     </div>
-
-    <div id="extra-container" class="extra-container hidden"></div>
-
-    <div id="translation-panel" class="info-panel hidden"></div>
   </div>
 </div>
 
@@ -76,6 +107,20 @@ function safeStorageSet(key, val) {
 // storage by dropdownChanged() - can never be raced by the capture step.
 var _gtCarriedSelections = null;
 var _gtCaptureDone = false;
+
+function anchorCenteredSentence() {
+  var config = window.AI_GRAMMAR_CONFIG || {};
+  var card = document.querySelector(".card");
+  var sentence = document.getElementById("sentence-container");
+  if (config.center_vertical !== true || !card || !sentence || card.classList.contains("gt-center-anchored")) return;
+
+  var sentenceTop = sentence.getBoundingClientRect().top;
+  var currentPadding = parseFloat(window.getComputedStyle(card).paddingTop) || 0;
+  card.style.setProperty("--gt-center-anchor-padding", currentPadding + "px");
+  card.classList.add("gt-center-anchored");
+  var startAlignedTop = sentence.getBoundingClientRect().top;
+  card.style.setProperty("--gt-center-anchor-padding", (currentPadding + sentenceTop - startAlignedTop) + "px");
+}
 
 function initDropdowns() {
   var sentenceArea = document.getElementById("sentence-container");
@@ -293,8 +338,7 @@ function shuffleDropdownOptions(wrapperEl) {
   var list = wrapperEl.querySelector(".custom-dropdown-list");
   if (!list || list.children.length < 2) return;
   
-  var placeholderOpt = list.children[0];
-  var optionEls = Array.prototype.slice.call(list.children, 1);
+  var optionEls = Array.prototype.slice.call(list.children);
   
   for (var k = optionEls.length - 1; k > 0; k--) {
     var m = Math.floor(Math.random() * (k + 1));
@@ -306,7 +350,6 @@ function shuffleDropdownOptions(wrapperEl) {
   while (list.firstChild) {
     list.removeChild(list.firstChild);
   }
-  list.appendChild(placeholderOpt);
   for (var j = 0; j < optionEls.length; j++) {
     list.appendChild(optionEls[j]);
   }
@@ -404,9 +447,6 @@ function createDropdownHTML(index, options, hint, isBackSideParam) {
           ' onfocus="shuffleDropdownOptionsOnFocus(this)">';
   html += '<span class="custom-dropdown-label' + (hasHint ? ' cloze-hint' : '') + '" id="blank-select-' + index + '-label">' + placeholderText + '</span>';
   html += '<div class="custom-dropdown-list hidden" id="blank-select-' + index + '-list" role="listbox">';
-  
-  var placeholderSelected = (storedVal === "") ? " is-selected" : "";
-  html += '<div class="custom-dropdown-option' + placeholderSelected + (hasHint ? ' cloze-hint' : '') + '" data-value="" role="option" onclick="event.stopPropagation(); selectCustomDropdownOption(' + index + ', this.getAttribute(`data-value`))">' + placeholderText + '</div>';
   
   for (var i = 0; i < shuffled.length; i++) {
     var optVal = shuffled[i];
@@ -524,6 +564,7 @@ function toggleCustomDropdown(index) {
 function selectCustomDropdownOption(index, value) {
   var wrapperEl = document.getElementById("blank-select-" + index);
   if (!wrapperEl || wrapperEl.disabled) return;
+  anchorCenteredSentence();
   wrapperEl.value = value;
   closeCustomDropdown(index);
   dropdownChanged(index);
@@ -577,10 +618,10 @@ function handleCustomDropdownKeydown(event, index) {
     if (target) selectCustomDropdownOption(index, target.getAttribute("data-value"));
   } else if (/^[1-9]$/.test(key) && (window.AI_GRAMMAR_CONFIG || {}).keyboard_shortcuts === true) {
     var n = parseInt(key, 10);
-    if (opts[n]) {
+    if (opts[n - 1]) {
       event.preventDefault();
       event.stopPropagation();
-      selectCustomDropdownOption(index, opts[n].getAttribute("data-value"));
+      selectCustomDropdownOption(index, opts[n - 1].getAttribute("data-value"));
     }
   } else if (key === "Escape") {
     event.preventDefault();
@@ -696,6 +737,7 @@ function restoreSelectedState(isBackSide) {
 }
 
 function checkAnkiAnswers() {
+  anchorCenteredSentence();
   for (var i = 0; i < _correctAnswers.length; i++) {
     var select = document.getElementById("blank-select-" + i);
     if (!select) continue;
@@ -1087,6 +1129,11 @@ CSS_STYLING = """
   align-items: center;
   min-height: 100vh;
   box-sizing: border-box;
+}
+
+.card.gt-center-anchored {
+  justify-content: flex-start !important;
+  padding-top: var(--gt-center-anchor-padding, 16px) !important;
 }
 
 .nightMode .card {
@@ -1512,6 +1559,10 @@ button:active {
   margin-bottom: 20px;
   text-align: center;
   transition: opacity 0.5s ease-out, transform 0.5s ease-out;
+  position: relative;
+  width: 100%;
+  height: auto;
+  overflow: visible;
 }
 
 .image-container.unrevealed {
@@ -1611,6 +1662,28 @@ button:active {
 }
 """
 
+# Fixed-centre layout, applied only when the vertical position setting is "Center".
+# The card area gets a DEFINITE height (the card viewport minus the card's own 16px top/bottom padding) and is a
+# 3-row grid: [above zone] [sentence] [below zone]. The two outer rows are minmax(0, 1fr), so they are always
+# exactly equal and the sentence row sits at the exact centre of the card area. Nothing in the zones can resize
+# those rows, so badges, images, hints, feedback, explanations, extra info and audio controls cannot move it, and
+# the front and back (which share this markup) place the sentence identically. Tall content below simply
+# overflows downward and the page scrolls; the image above shrinks to fit instead of overflowing upward.
+CENTER_ANCHOR_CSS = """
+.anki-card-outer-container { height: calc(100vh - 32px) !important; flex: none !important; }
+.anki-grammar-card { display: grid !important; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr) !important; height: 100% !important; }
+.gt-zone-above, .gt-zone-below { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.gt-zone-above { grid-row: 1; justify-content: flex-end; }
+.sentence-container { grid-row: 2; margin-bottom: 0 !important; }
+.gt-zone-below { grid-row: 3; justify-content: flex-start; padding-top: 24px; }
+.gt-zone-below > * { flex-shrink: 0; }
+.gt-zone-above > .card-meta { flex: none; }
+#image-container { flex: 0 1 auto !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; align-items: center !important; }
+#image-container img { flex: 0 1 auto !important; min-height: 0 !important; max-width: 100% !important; object-fit: contain !important; }
+@media (max-width: 560px) { .gt-zone-above { padding-top: 52px; } }
+"""
+
+
 def setup_note_type():
     col = mw.col
     models = col.models
@@ -1618,13 +1691,16 @@ def setup_note_type():
     # Load configuration
     addon_name = __package__ or __name__.split('.')[0]
     config = mw.addonManager.getConfig(addon_name) or {}
+    addon_id = mw.addonManager.addonFromModule(addon_name)
+    saved_config = mw.addonManager.addonMeta(addon_id).get("config", {})
+    if not isinstance(saved_config, dict):
+        saved_config = {}
     show_lang = config.get("show_language", False)
     show_diff = config.get("show_difficulty", False)
     show_check = config.get("show_check_answer", False)
     show_bg = config.get("show_white_background", False)
     show_explanation_bg = config.get("show_explanation_background", False)
-    center_horiz = config.get("center_horizontal", True)
-    center_vert = config.get("center_vertical", True)
+    horizontal_alignment, vertical_position = resolve_display_positions(config, saved_config)
     auto_flip = config.get("auto_flip", True)
     
     # Append display overrides based on show/hide options
@@ -1636,20 +1712,104 @@ def setup_note_type():
     # The grammar-type badge is no longer settings-controlled (Grammar is now
     # chosen per-card in the generator itself); keep it hidden by default.
     css_with_toggles += "\n.badge-type { display: none !important; }"
+    if not show_lang and not show_diff:
+        # No badge is visible, so the (otherwise empty) metadata row must not
+        # keep contributing its bottom margin above the sentence.
+        css_with_toggles += "\n.card-meta { display: none !important; }"
     if not show_check:
         css_with_toggles += "\n.check-btn { display: none !important; }"
     if not show_bg:
         css_with_toggles += "\n.anki-grammar-card { background: transparent !important; box-shadow: none !important; border: none !important; padding: 0 !important; }\n.nightMode .anki-grammar-card { background: transparent !important; box-shadow: none !important; border: none !important; padding: 0 !important; }"
     if not show_explanation_bg:
         css_with_toggles += "\n.explanation-container { background: transparent !important; padding: 0 !important; }\n.nightMode .explanation-container { background: transparent !important; }"
-    if not center_horiz:
-        css_with_toggles += "\n.sentence-container { text-align: left !important; }\n.card-meta { justify-content: flex-start !important; }\n.action-bar { justify-content: flex-start !important; }\n.anki-grammar-card { align-items: flex-start !important; }\n.anki-card-outer-container { margin: 0 !important; }\n.card { align-items: flex-start !important; }"
-    if center_vert:
-        css_with_toggles += "\n.card { display: flex !important; flex-direction: column !important; justify-content: flex-start !important; min-height: 100vh !important; padding-top: 26vh !important; }"
-        css_with_toggles += "\n.anki-grammar-card.has-image .image-container { position: absolute !important; bottom: calc(100% + 16px) !important; left: 0 !important; right: 0 !important; height: 220px !important; margin: 0 !important; display: flex !important; justify-content: center !important; align-items: center !important; }"
+    css_with_toggles += "\n.card { display: flex !important; flex-direction: column !important; min-height: 100vh !important; box-sizing: border-box !important; }"
+    if vertical_position == "center":
+        css_with_toggles += "\n.card { justify-content: center !important; padding-top: 16px !important; padding-bottom: 16px !important; }"
+    elif vertical_position == "bottom":
+        # The auto top margin absorbs spare height, then collapses when content
+        # is taller than the viewport so long cards remain in normal flow.
+        css_with_toggles += "\n.card { justify-content: flex-start !important; padding-top: 16px !important; padding-bottom: 24px !important; }\n.card::before { content: ''; margin-top: auto; }"
     else:
-        css_with_toggles += "\n.card { display: flex !important; flex-direction: column !important; justify-content: flex-start !important; min-height: 100vh !important; padding-top: 40px !important; }"
-        css_with_toggles += "\n.anki-grammar-card.has-image .image-container { position: absolute !important; top: calc(100% + 16px) !important; left: 0 !important; right: 0 !important; height: 220px !important; margin: 0 !important; display: flex !important; justify-content: center !important; align-items: center !important; }"
+        css_with_toggles += "\n.card { justify-content: flex-start !important; padding-top: 40px !important; padding-bottom: 24px !important; }"
+        # Top only: the not-yet-revealed image must not reserve its height or
+        # margins above the sentence. Once revealed (class removed) it returns
+        # to normal flow above the sentence and pushes it down. Center/Bottom
+        # keep reserving the space.
+        css_with_toggles += "\n#image-container.unrevealed { position: absolute !important; top: 0 !important; left: 0 !important; height: 0 !important; margin: 0 !important; overflow: hidden !important; }"
+
+    if horizontal_alignment == "left":
+        css_with_toggles += "\n.sentence-container { text-align: left !important; }\n.card-meta { justify-content: flex-start !important; }\n.action-bar { justify-content: flex-start !important; }\n.anki-card-outer-container { margin-left: 0 !important; margin-right: auto !important; }\n.card { align-items: flex-start !important; }"
+    elif horizontal_alignment == "right":
+        css_with_toggles += "\n.sentence-container { text-align: right !important; }\n.card-meta { justify-content: flex-end !important; }\n.action-bar { justify-content: flex-end !important; }\n.anki-card-outer-container { margin-left: auto !important; margin-right: 0 !important; }\n.card { align-items: flex-end !important; }"
+    else:
+        css_with_toggles += "\n.sentence-container { text-align: center !important; }\n.card-meta { justify-content: center !important; }\n.action-bar { justify-content: center !important; }\n.anki-card-outer-container { margin-left: auto !important; margin-right: auto !important; }\n.card { align-items: center !important; }"
+
+    controls_position = config.get("audio_controls_position", "top_right")
+    if controls_position not in ("top_right", "top_left", "bottom_right", "bottom_left"):
+        controls_position = "top_right"
+    controls_vertical, controls_horizontal = controls_position.split("_")
+    controls_edges = (
+        f"top: {'calc(12px + env(safe-area-inset-top))' if controls_vertical == 'top' else 'auto'} !important; "
+        f"bottom: {'calc(12px + env(safe-area-inset-bottom))' if controls_vertical == 'bottom' else 'auto'} !important; "
+        f"left: {'calc(12px + env(safe-area-inset-left))' if controls_horizontal == 'left' else 'auto'} !important; "
+        f"right: {'calc(12px + env(safe-area-inset-right))' if controls_horizontal == 'right' else 'auto'} !important; "
+        f"align-items: {'flex-start' if controls_horizontal == 'left' else 'flex-end'} !important;"
+    )
+    css_with_toggles += f"\n.top-right-audio {{ position: fixed !important; {controls_edges} }}"
+    if controls_vertical == "top":
+        mobile_control_order = (
+            "#front-audio-container { order: 0 !important; margin-bottom: 12px !important; } "
+            ".anki-grammar-card { order: 1 !important; } "
+            ".back-only-container { order: 0 !important; margin-bottom: 12px !important; } "
+            ".anki-card-outer-container { order: 1 !important; } #answer { order: 2 !important; }"
+        )
+    else:
+        mobile_control_order = (
+            ".anki-grammar-card { order: 0 !important; } "
+            "#front-audio-container { order: 1 !important; margin-top: 12px !important; } "
+            ".anki-card-outer-container { order: 0 !important; } #answer { order: 1 !important; } "
+            ".back-only-container { order: 2 !important; margin-top: 12px !important; }"
+        )
+    mobile_controls_css = (
+        " .anki-card-outer-container { display: flex !important; flex-direction: column !important; "
+        "margin-left: 0 !important; margin-right: 0 !important; } "
+        ".top-right-audio { position: static !important; inset: auto !important; width: 100% !important; "
+        "max-width: 100% !important; flex-direction: row !important; flex-wrap: wrap !important; gap: 4px !important; "
+        f"justify-content: {'flex-start' if controls_horizontal == 'left' else 'flex-end'} !important; "
+        "margin-bottom: 0; } .back-only-container { display: flex !important; flex-direction: column !important; "
+        "width: 100% !important; } " + mobile_control_order
+    )
+    mobile_scoped_controls_css = mobile_controls_css.replace(" .", " .mobile .").replace("#", ".mobile #")
+    css_with_toggles += (
+        "\n@media (max-width: 560px) { .card { padding-left: 12px !important; padding-right: 12px !important; } "
+        + mobile_controls_css + " }"
+        "\n.mobile .card { padding-left: 12px !important; padding-right: 12px !important; }"
+        + mobile_scoped_controls_css
+    )
+
+    image_max_height = config.get("image_max_height", 240)
+    if image_max_height not in (160, 240, 320, 480):
+        image_max_height = 240
+    css_with_toggles += (
+        f"\n#image-container {{ position: relative !important; width: 100% !important; height: auto !important; "
+        f"overflow: visible !important; }}"
+        f"\n#image-container img {{ max-width: 100% !important; "
+        f"max-height: {image_max_height}px !important; height: auto !important; object-fit: contain !important; }}"
+        "\n@media (max-width: 560px) { #image-container img { max-height: min("
+        f"{image_max_height}px, calc(100vh - 160px)) !important; }}}}"
+        "\n.mobile #image-container img { max-height: min("
+        f"{image_max_height}px, calc(100vh - 160px)) !important; }}"
+    )
+
+    font_family = config.get("font_family", "system")
+    font_stacks = {
+        "system": '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+        "serif": 'Georgia, "Times New Roman", serif',
+        "monospace": 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+    }
+    if font_family not in font_stacks:
+        font_family = "system"
+    css_with_toggles += f"\n.card {{ font-family: {font_stacks[font_family]} !important; }}"
         
     font_size = config.get("font_size", 20)
     css_with_toggles += f"\n.sentence-container {{ font-size: {font_size}px !important; }}"
@@ -1667,6 +1827,21 @@ def setup_note_type():
     else:
         css_with_toggles += "\n.result-box { text-align: left !important; }\n.explanation-container { text-align: left !important; }\n.info-toggle-row { justify-content: flex-start !important; }\n.extra-container { text-align: left !important; }"
         
+    if vertical_position == "center":
+        css_with_toggles += CENTER_ANCHOR_CSS
+        # Audio controls are overlays (fixed to the card viewport) on every screen size so they take no part in
+        # the layout: the desktop rule already did this, the small-screen rule made them in-flow instead.
+        css_with_toggles += (
+            "\n.top-right-audio, .mobile .top-right-audio { position: fixed !important; " + controls_edges
+            + " width: auto !important; max-width: none !important; flex-direction: column !important;"
+            " flex-wrap: nowrap !important; margin: 0 !important; }"
+            "\n#front-audio-container, .back-only-container, .mobile #front-audio-container, .mobile .back-only-container { margin: 0 !important; }"
+        )
+        if controls_vertical == "bottom":
+            css_with_toggles += (
+                "\n@media (max-width: 560px) { .gt-zone-below::after { content: \"\"; flex: none; height: 56px; } }"
+            )
+
     blank_timer = config.get("blank_timer", 0)
     auto_open = "true" if config.get("auto_open_dropdown", False) else "false"
     keyboard_shortcuts = "true" if config.get("keyboard_shortcuts", False) else "false"
@@ -1680,8 +1855,8 @@ def setup_note_type():
     config_js = (
         '<script>window.AI_GRAMMAR_CONFIG = {'
         f'"auto_flip": {"true" if auto_flip else "false"}, '
-        f'"center_horizontal": {"true" if center_horiz else "false"}, '
-        f'"center_vertical": {"true" if center_vert else "false"}, '
+        f'"center_horizontal": {"true" if horizontal_alignment == "center" else "false"}, '
+        f'"center_vertical": {"true" if vertical_position == "center" else "false"}, '
         f'"blank_timer": {blank_timer}, '
         f'"auto_open_dropdown": {auto_open}, '
         f'"keyboard_shortcuts": {keyboard_shortcuts}, '
